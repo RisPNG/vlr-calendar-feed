@@ -7,19 +7,24 @@
   "settings": {
     "timezone": "Asia/Kuala_Lumpur",
     "default_match_duration_minutes": 120,
-    "upcoming_limit": 50,
-    "completed_limit": 0,
-    "include_completed": false,
+    "upcoming_limit": 999,
+    "include_live": true,
+    "live_limit": 999,
+    "live_match_start_fallback": "now",
+    "completed_limit": 999,
+    "include_completed": true,
     "request_timeout_seconds": 20,
-    "allow_date_only": false
+    "allow_date_only": false,
+    "published_ttl_hours": 2
   },
   "calendars": [
     {
       "slug": "paper-rex",
       "name": "Paper Rex VLR Matches",
-      "description": "Upcoming Paper Rex Valorant fixtures from VLR.gg.",
+      "description": "All Paper Rex Valorant matches from VLR.gg.",
       "type": "team",
       "team_id": 624,
+      "team_aliases": ["Paper Rex", "PRX"],
       "enabled": true
     }
   ]

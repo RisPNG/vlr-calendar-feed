@@ -3,7 +3,7 @@ name: Build and deploy calendar feeds
 on:
   schedule:
     # GitHub cron is UTC. Minute 17 avoids the top-of-hour load spike.
-    - cron: "17 */6 * * *"
+    - cron: "17 */2 * * *"
   workflow_dispatch:
   push:
     branches:

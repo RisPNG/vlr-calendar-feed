@@ -12,7 +12,7 @@ import html
 import json
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -38,6 +38,7 @@ class CalendarSource:
     enabled: bool
     team_id: int | None = None
     player_id: int | None = None
+    team_aliases: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,10 @@ def clean_text(value: Any, fallback: str = "") -> str:
         return fallback
     text = str(value).strip()
     return re.sub(r"\s+", " ", text) or fallback
+
+
+def normalize_name(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", clean_text(value).lower())
 
 
 def get_attr(obj: Any, *names: str, default: Any = None) -> Any:
@@ -93,6 +98,11 @@ def load_sources(config: dict[str, Any]) -> list[CalendarSource]:
             continue
         slug = clean_slug(item.get("slug") or item.get("name") or "calendar")
         source_type = clean_text(item.get("type"), "team").lower()
+        aliases = item.get("team_aliases", [])
+        if isinstance(aliases, str):
+            aliases = [aliases]
+        if not isinstance(aliases, list):
+            aliases = []
         sources.append(
             CalendarSource(
                 slug=slug,
@@ -102,6 +112,7 @@ def load_sources(config: dict[str, Any]) -> list[CalendarSource]:
                 enabled=bool(item.get("enabled", True)),
                 team_id=parse_optional_int(item.get("team_id")),
                 player_id=parse_optional_int(item.get("player_id")),
+                team_aliases=[clean_text(alias) for alias in aliases if clean_text(alias)],
             )
         )
     return sources
@@ -128,38 +139,112 @@ def fetch_matches_for_source(source: CalendarSource, settings: dict[str, Any]) -
     timeout = settings.get("request_timeout_seconds")
     upcoming_limit = int(settings.get("upcoming_limit", 50))
     completed_limit = int(settings.get("completed_limit", 0))
+    live_limit = int(settings.get("live_limit", 50))
     include_completed = bool(settings.get("include_completed", False))
+    include_live = bool(settings.get("include_live", False))
 
     matches: list[Any] = []
 
     if source.source_type == "team":
         if source.team_id is None:
             raise ValueError(f"Calendar {source.slug!r} is type=team but has no team_id.")
-        matches.extend(vlr.teams.upcoming_matches(team_id=source.team_id, limit=upcoming_limit, timeout=timeout))
+
+        matches.extend(
+            vlr.teams.upcoming_matches(
+                team_id=source.team_id,
+                limit=upcoming_limit,
+                timeout=timeout,
+            )
+        )
+
+        if include_live:
+            live_matches = vlr.matches.live(limit=live_limit, timeout=timeout)
+            matches.extend(filter_live_matches_for_team(live_matches, source))
+
         if include_completed and completed_limit > 0:
-            matches.extend(vlr.teams.completed_matches(team_id=source.team_id, limit=completed_limit, timeout=timeout))
+            matches.extend(
+                vlr.teams.completed_matches(
+                    team_id=source.team_id,
+                    limit=completed_limit,
+                    timeout=timeout,
+                )
+            )
         return matches
 
     if source.source_type == "player":
         if source.player_id is None:
             raise ValueError(f"Calendar {source.slug!r} is type=player but has no player_id.")
+
         profile = vlr.players.profile(player_id=source.player_id, timeout=timeout)
         team_ids = current_team_ids_from_profile(profile)
         seen_team_ids: set[int] = set()
+
         for team_id in team_ids:
             if team_id in seen_team_ids:
                 continue
             seen_team_ids.add(team_id)
+            team_source = CalendarSource(
+                slug=source.slug,
+                name=source.name,
+                description=source.description,
+                source_type="team",
+                enabled=True,
+                team_id=team_id,
+                team_aliases=source.team_aliases,
+            )
             matches.extend(vlr.teams.upcoming_matches(team_id=team_id, limit=upcoming_limit, timeout=timeout))
+            if include_live:
+                live_matches = vlr.matches.live(limit=live_limit, timeout=timeout)
+                matches.extend(filter_live_matches_for_team(live_matches, team_source))
+
         if include_completed and completed_limit > 0:
             matches.extend(vlr.players.matches(player_id=source.player_id, limit=completed_limit, timeout=timeout))
         return matches
 
     if source.source_type == "global":
         matches.extend(vlr.matches.upcoming(limit=upcoming_limit, timeout=timeout))
+        if include_live:
+            matches.extend(vlr.matches.live(limit=live_limit, timeout=timeout))
         return matches
 
     raise ValueError(f"Unsupported calendar type for {source.slug!r}: {source.source_type!r}")
+
+
+def filter_live_matches_for_team(live_matches: Iterable[Any], source: CalendarSource) -> list[Any]:
+    return [match for match in live_matches if match_involves_source_team(match, source)]
+
+
+def match_involves_source_team(match: Any, source: CalendarSource) -> bool:
+    if source.team_id is None and not source.team_aliases:
+        return False
+
+    for team in iter_match_teams(match):
+        team_id = parse_optional_int(get_attr(team, "id", "team_id", default=None))
+        if source.team_id is not None and team_id == source.team_id:
+            return True
+
+        team_name = get_attr(team, "name", "tag", "team_name", default="")
+        if team_name_matches_source(team_name, source):
+            return True
+
+    return False
+
+
+def iter_match_teams(match: Any) -> list[Any]:
+    teams = get_attr(match, "teams", default=None)
+    if teams and isinstance(teams, (list, tuple, set)):
+        return list(teams)
+    return [get_attr(match, "team1", default=None), get_attr(match, "team2", default=None)]
+
+
+def team_name_matches_source(team_name: Any, source: CalendarSource) -> bool:
+    name = normalize_name(team_name)
+    if not name:
+        return False
+    aliases = [*source.team_aliases]
+    if source.name:
+        aliases.append(source.name.replace(" VLR Matches", ""))
+    return any(name == normalize_name(alias) for alias in aliases if normalize_name(alias))
 
 
 def current_team_ids_from_profile(profile: Any) -> list[int]:
@@ -181,23 +266,35 @@ def current_team_ids_from_profile(profile: Any) -> list[int]:
     return ids
 
 
-def normalize_match(raw: Any, tz: ZoneInfo, allow_date_only: bool = False) -> NormalizedMatch | None:
+def normalize_match(
+    raw: Any,
+    tz: ZoneInfo,
+    allow_date_only: bool = False,
+    fallback_live_start: datetime | None = None,
+) -> NormalizedMatch | None:
     match_id = get_attr(raw, "match_id", "id", "series_id")
     if match_id in (None, ""):
         return None
 
     team1 = get_attr(raw, "team1", default=None)
     team2 = get_attr(raw, "team2", default=None)
-    team1_name = clean_text(get_attr(team1, "name", "team1_name", default=None), "TBD")
-    team2_name = clean_text(get_attr(team2, "name", "team2_name", default=None), "TBD")
+    teams = get_attr(raw, "teams", default=None)
+    if teams and isinstance(teams, (list, tuple)):
+        team1 = team1 or (teams[0] if len(teams) >= 1 else None)
+        team2 = team2 or (teams[1] if len(teams) >= 2 else None)
+
+    team1_name = clean_text(get_attr(team1, "name", "team1_name", "tag", default=None), "TBD")
+    team2_name = clean_text(get_attr(team2, "name", "team2_name", "tag", default=None), "TBD")
 
     event_name = clean_text(
-        get_attr(raw, "event", "event_name", "tournament_name", "tournament", default=None),
+        get_attr(raw, "event", "event_name", "tournament_name", "tournament", "event_phase", default=None),
         "VALORANT",
     )
 
     status = clean_text(get_attr(raw, "status", default="upcoming"), "upcoming").lower()
     starts_at = parse_match_datetime(raw, tz=tz, allow_date_only=allow_date_only)
+    if starts_at is None and status == "live" and fallback_live_start is not None:
+        starts_at = with_timezone(fallback_live_start, tz)
     if starts_at is None:
         return None
 
@@ -242,7 +339,9 @@ def parse_match_datetime(raw: Any, tz: ZoneInfo, allow_date_only: bool = False) 
         parsed = parse_datetime_string(candidate, tz=tz)
         if parsed is None:
             continue
-        if not allow_date_only and parsed.time() == time(0, 0) and not re.search(r"\d{1,2}:\d{2}|\d{1,2}\s*(?:am|pm)", candidate, re.I):
+        if not allow_date_only and parsed.time() == time(0, 0) and not re.search(
+            r"\d{1,2}:\d{2}|\d{1,2}\s*(?:am|pm)", candidate, re.I
+        ):
             continue
         return parsed
 
@@ -270,13 +369,11 @@ def parse_datetime_string(value: str, tz: ZoneInfo) -> datetime | None:
     if not text or text.lower() in {"tbd", "live", "completed"}:
         return None
 
-    # Try ISO first, including common UTC Z suffix.
     try:
         return with_timezone(datetime.fromisoformat(text.replace("Z", "+00:00")), tz)
     except ValueError:
         pass
 
-    # Small set of fallback patterns for date+time strings commonly seen in scraped data.
     formats = (
         "%Y-%m-%d %H:%M",
         "%Y-%m-%d %I:%M %p",
@@ -322,6 +419,7 @@ def build_ical_calendar(
     settings: dict[str, Any],
 ) -> bytes:
     duration = timedelta(minutes=int(settings.get("default_match_duration_minutes", 120)))
+    ttl_hours = int(settings.get("published_ttl_hours", 2))
     generated_at = datetime.now(timezone.utc)
     lines = [
         "BEGIN:VCALENDAR",
@@ -331,7 +429,8 @@ def build_ical_calendar(
         "METHOD:PUBLISH",
         f"X-WR-CALNAME:{ics_text(source.name)}",
         f"X-WR-CALDESC:{ics_text(source.description)}",
-        "X-PUBLISHED-TTL:PT6H",
+        f"X-PUBLISHED-TTL:PT{ttl_hours}H",
+        "REFRESH-INTERVAL;VALUE=DURATION:PT2H",
     ]
 
     for match in matches:
@@ -346,6 +445,7 @@ def build_ical_calendar(
                 f"DESCRIPTION:{ics_text(build_description(match))}",
                 f"URL:{ics_text(match.url)}",
                 f"CATEGORIES:{ics_text('VALORANT,VLR.gg,' + match.status)}",
+                f"STATUS:{'CONFIRMED' if match.status != 'cancelled' else 'CANCELLED'}",
                 "END:VEVENT",
             ]
         )
@@ -368,8 +468,6 @@ def ics_text(value: Any) -> str:
 
 
 def fold_ics_line(line: str, limit: int = 75) -> str:
-    # RFC 5545 line folding is octet-based. This implementation is ASCII-safe
-    # for property names and practical for UTF-8 values by checking byte length.
     if len(line.encode("utf-8")) <= limit:
         return line
     output: list[str] = []
@@ -433,7 +531,7 @@ def write_index(config: dict[str, Any], built_calendars: list[dict[str, Any]]) -
   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
   <title>{html.escape(title)}</title>
   <style>
-    :root {{ color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
+    :root {{ color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; }}
     body {{ margin: 0; min-height: 100vh; background: #101114; color: #f5f5f5; }}
     main {{ width: min(920px, calc(100% - 32px)); margin: 0 auto; padding: 64px 0; }}
     h1 {{ font-size: clamp(2rem, 5vw, 4rem); line-height: 1; margin: 0 0 16px; }}
@@ -484,6 +582,8 @@ def build() -> int:
     settings = config.get("settings", {}) if isinstance(config.get("settings"), dict) else {}
     tz = ZoneInfo(clean_text(settings.get("timezone"), "UTC"))
     allow_date_only = bool(settings.get("allow_date_only", False))
+    live_start_fallback = clean_text(settings.get("live_match_start_fallback"), "now").lower()
+    fallback_live_start = datetime.now(tz) if live_start_fallback == "now" else None
     sources = [source for source in load_sources(config) if source.enabled]
 
     PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
@@ -495,7 +595,15 @@ def build() -> int:
         normalized = [
             match
             for raw in raw_matches
-            if (match := normalize_match(raw, tz=tz, allow_date_only=allow_date_only)) is not None
+            if (
+                match := normalize_match(
+                    raw,
+                    tz=tz,
+                    allow_date_only=allow_date_only,
+                    fallback_live_start=fallback_live_start,
+                )
+            )
+            is not None
         ]
         matches = dedupe_matches(normalized)
         ics_bytes = build_ical_calendar(source, matches, settings)
