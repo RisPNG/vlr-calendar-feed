@@ -1,50 +1,39 @@
 #!/usr/bin/env python3
-"""Find VLR team/player IDs using vlrdevapi search."""
+"""Find VLR team/player IDs using vlrdevapi search helpers."""
 
 from __future__ import annotations
 
 import argparse
-from typing import Any
+import sys
 
-import vlrdevapi as vlr
-
-
-def get_attr(obj: Any, *names: str, default: Any = None) -> Any:
-    for name in names:
-        if isinstance(obj, dict) and name in obj:
-            return obj[name]
-        if hasattr(obj, name):
-            return getattr(obj, name)
-    return default
-
-
-def print_rows(kind: str, rows: list[Any]) -> None:
-    if not rows:
-        print(f"No {kind} results found.")
-        return
-    for item in rows:
-        item_id = get_attr(item, "id", "team_id", "player_id", default="?")
-        name = get_attr(item, "name", "ign", "handle", default="?")
-        country = get_attr(item, "country", default="")
-        print(f"{kind[:-1].title()} ID: {item_id} | {name} {f'({country})' if country else ''}")
+try:
+    import vlrdevapi as vlr
+except Exception as exc:  # pragma: no cover
+    raise SystemExit("vlrdevapi is not installed. Run: python -m pip install -r requirements.txt") from exc
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Search VLR IDs for config/calendars.json")
-    parser.add_argument("query", help="Team or player name, for example 'paper rex' or 'tenz'")
-    parser.add_argument("--type", choices=["team", "player", "all"], default="all")
+    parser = argparse.ArgumentParser(description="Search VLR IDs for teams or players.")
+    parser.add_argument("query", help="Search query, e.g. 'paper rex' or 'something'")
+    parser.add_argument("--type", choices=("team", "player"), default="team")
+    parser.add_argument("--limit", type=int, default=10)
     args = parser.parse_args()
 
-    if args.type in {"team", "all"}:
-        teams = vlr.search.search_teams(args.query)
-        print_rows("teams", list(teams)[:10])
-
-    if args.type in {"player", "all"}:
-        players = vlr.search.search_players(args.query)
-        print_rows("players", list(players)[:10])
+    if args.type == "team":
+        results = vlr.search.search_teams(args.query, limit=args.limit)
+        for item in results:
+            print(f"team_id={getattr(item, 'team_id', '')}\tname={getattr(item, 'name', '')}\turl={getattr(item, 'url', '')}")
+    else:
+        results = vlr.search.search_players(args.query, limit=args.limit)
+        for item in results:
+            print(f"player_id={getattr(item, 'player_id', '')}\tign={getattr(item, 'ign', '')}\treal_name={getattr(item, 'real_name', '')}\turl={getattr(item, 'url', '')}")
 
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("Interrupted", file=sys.stderr)
+        raise SystemExit(130)

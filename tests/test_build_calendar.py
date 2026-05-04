@@ -4,123 +4,101 @@ from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from scripts.build_calendar import (
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+
+from build_calendar import (  # noqa: E402
     CalendarSource,
+    NormalizedMatch,
     build_ical_calendar,
-    match_involves_source_team,
+    current_team_ids_from_profile,
+    dedupe_matches,
     normalize_match,
 )
 
 
 @dataclass
-class Team:
-    name: str
-    id: int | None = None
+class Obj:
+    pass
 
 
-@dataclass
-class RawMatch:
-    match_id: int
-    team1: Team
-    team2: Team
-    event: str
-    match_datetime: datetime | None = None
-    status: str = "upcoming"
+def test_player_match_uses_player_team_and_opponent_team() -> None:
+    tz = ZoneInfo("Asia/Kuala_Lumpur")
 
+    player_team = Obj()
+    player_team.name = "Shopify Rebellion"
+    player_team.tag = "SR"
 
-def test_normalize_match_generates_expected_summary():
-    raw = RawMatch(
-        match_id=123,
-        team1=Team("PRX"),
-        team2=Team("DRX"),
-        event="VCT Pacific",
-        match_datetime=datetime(2026, 5, 10, 20, 0),
-    )
+    opponent_team = Obj()
+    opponent_team.name = "Xipto Esports"
+    opponent_team.tag = "XIP"
 
-    match = normalize_match(raw, tz=ZoneInfo("Asia/Kuala_Lumpur"))
+    raw = Obj()
+    raw.match_id = 123
+    raw.url = "/123/example-match"
+    raw.player_team = player_team
+    raw.opponent_team = opponent_team
+    raw.event = "Game Changers"
+    raw.result = "win"
+    raw.date = "2026-05-01"
+    raw.time = "20:00"
+
+    match = normalize_match(raw, tz=tz)
 
     assert match is not None
-    assert match.summary == "VCT Pacific | PRX vs DRX"
-    assert match.url == "https://www.vlr.gg/123"
+    assert match.summary == "Game Changers | Shopify Rebellion (SR) vs Xipto Esports (XIP)"
+    assert match.status == "completed"
 
 
-def test_build_ical_contains_match_url_and_uid():
-    raw = RawMatch(
-        match_id=456,
-        team1=Team("PRX"),
-        team2=Team("GEN"),
-        event="Masters",
-        match_datetime=datetime(2026, 6, 1, 18, 0),
-    )
-    match = normalize_match(raw, tz=ZoneInfo("Asia/Kuala_Lumpur"))
-    assert match is not None
+def test_live_match_fallback_start_time() -> None:
+    tz = ZoneInfo("Asia/Kuala_Lumpur")
+    fallback = datetime(2026, 5, 4, 20, 0, tzinfo=tz)
 
-    ics = build_ical_calendar(
-        CalendarSource(
-            slug="paper-rex",
-            name="Paper Rex VLR Matches",
-            description="Test calendar",
-            source_type="team",
-            enabled=True,
-            team_id=624,
-        ),
-        [match],
-        {"default_match_duration_minutes": 120},
-    ).decode("utf-8")
+    raw = {
+        "match_id": 456,
+        "status": "live",
+        "event": "VCT Pacific",
+        "teams": [
+            {"name": "Paper Rex", "id": 624},
+            {"name": "DRX", "id": 8185},
+        ],
+        "url": "/456/live-match",
+    }
 
-    assert "UID:vlr-match-456@vlr-calendar-feed" in ics
-    assert "SUMMARY:Masters | PRX vs GEN" in ics
-    assert "https://www.vlr.gg/456" in ics
-
-
-def test_live_match_without_datetime_uses_fallback_start():
-    raw = RawMatch(
-        match_id=789,
-        team1=Team("Paper Rex", 624),
-        team2=Team("DRX", 8185),
-        event="VCT Pacific",
-        status="live",
-    )
-    fallback = datetime(2026, 5, 4, 21, 30, tzinfo=ZoneInfo("Asia/Kuala_Lumpur"))
-
-    match = normalize_match(
-        raw,
-        tz=ZoneInfo("Asia/Kuala_Lumpur"),
-        fallback_live_start=fallback,
-    )
+    match = normalize_match(raw, tz=tz, fallback_live_start=fallback)
 
     assert match is not None
     assert match.starts_at == fallback
-    assert match.status == "live"
+    assert match.summary == "VCT Pacific | Paper Rex vs DRX"
 
 
-def test_live_match_filters_by_team_id_or_alias():
-    source = CalendarSource(
-        slug="paper-rex",
-        name="Paper Rex VLR Matches",
-        description="Test calendar",
-        source_type="team",
-        enabled=True,
-        team_id=624,
-        team_aliases=["PRX", "Paper Rex"],
-    )
+def test_current_team_ids_from_profile() -> None:
+    profile = Obj()
+    team = Obj()
+    team.id = 624
+    team.role = "player"
+    team.left_date = None
+    profile.current_teams = [team]
 
-    assert match_involves_source_team(
-        RawMatch(
-            match_id=1,
-            team1=Team("Whatever", 624),
-            team2=Team("DRX", 8185),
-            event="VCT Pacific",
-        ),
-        source,
-    )
+    assert current_team_ids_from_profile(profile) == [624]
 
-    assert match_involves_source_team(
-        RawMatch(
-            match_id=2,
-            team1=Team("PRX", None),
-            team2=Team("DRX", None),
-            event="VCT Pacific",
-        ),
-        source,
-    )
+
+def test_dedupe_prefers_non_tbd_names() -> None:
+    dt = datetime(2026, 5, 4, 20, 0, tzinfo=ZoneInfo("Asia/Kuala_Lumpur"))
+    bad = NormalizedMatch("1", "Event", "TBD", "TBD", dt, "upcoming", "https://www.vlr.gg/1")
+    good = NormalizedMatch("1", "Event", "A", "B", dt, "completed", "https://www.vlr.gg/1")
+
+    assert dedupe_matches([bad, good])[0].summary == "Event | A vs B"
+
+
+def test_ics_contains_stable_uid_and_summary() -> None:
+    dt = datetime(2026, 5, 4, 20, 0, tzinfo=ZoneInfo("Asia/Kuala_Lumpur"))
+    source = CalendarSource("ayumiii", "Ayumiii", "Calendar", "player", True, player_id=8175)
+    match = NormalizedMatch("123", "Event", "Team A", "Team B", dt, "completed", "https://www.vlr.gg/123")
+
+    ics = build_ical_calendar(source, [match], {"published_ttl_hours": 2}).decode("utf-8")
+
+    assert "UID:vlr-match-123@vlr-calendar-feed" in ics
+    assert "SUMMARY:Event | Team A vs Team B" in ics
