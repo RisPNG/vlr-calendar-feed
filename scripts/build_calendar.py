@@ -266,35 +266,58 @@ def current_team_ids_from_profile(profile: Any) -> list[int]:
     return ids
 
 
-def normalize_match(
-    raw: Any,
-    tz: ZoneInfo,
-    allow_date_only: bool = False,
-    fallback_live_start: datetime | None = None,
-) -> NormalizedMatch | None:
+def team_name_from_obj(team: Any, fallback: str = "TBD") -> str:
+    name = clean_text(
+        get_attr(
+            team,
+            "name",
+            "team_name",
+            "team1_name",
+            "team2_name",
+            "tag",
+            "core",
+            default=None,
+        ),
+        "",
+    )
+
+    tag = clean_text(get_attr(team, "tag", default=""), "")
+
+    if name and tag and name != tag:
+        return f"{name} ({tag})"
+
+    return name or tag or fallback
+
+
+def normalize_match(raw: Any, tz: ZoneInfo, allow_date_only: bool = False) -> NormalizedMatch | None:
     match_id = get_attr(raw, "match_id", "id", "series_id")
+
     if match_id in (None, ""):
         return None
 
-    team1 = get_attr(raw, "team1", default=None)
-    team2 = get_attr(raw, "team2", default=None)
-    teams = get_attr(raw, "teams", default=None)
-    if teams and isinstance(teams, (list, tuple)):
-        team1 = team1 or (teams[0] if len(teams) >= 1 else None)
-        team2 = team2 or (teams[1] if len(teams) >= 2 else None)
+    # Team/global match objects usually use team1/team2.
+    # Player match-history objects use player_team/opponent_team.
+    team1 = get_attr(raw, "team1", "player_team", default=None)
+    team2 = get_attr(raw, "team2", "opponent_team", default=None)
 
-    team1_name = clean_text(get_attr(team1, "name", "team1_name", "tag", default=None), "TBD")
-    team2_name = clean_text(get_attr(team2, "name", "team2_name", "tag", default=None), "TBD")
+    team1_name = team_name_from_obj(team1, fallback="TBD")
+    team2_name = team_name_from_obj(team2, fallback="TBD")
 
     event_name = clean_text(
-        get_attr(raw, "event", "event_name", "tournament_name", "tournament", "event_phase", default=None),
+        get_attr(raw, "event", "event_name", "tournament_name", "tournament", default=None),
         "VALORANT",
     )
 
     status = clean_text(get_attr(raw, "status", default="upcoming"), "upcoming").lower()
+
+    # Player history uses result instead of status, so completed player matches
+    # should not look like upcoming matches.
+    result = clean_text(get_attr(raw, "result", default=""))
+    if result and status == "upcoming":
+        status = "completed"
+
     starts_at = parse_match_datetime(raw, tz=tz, allow_date_only=allow_date_only)
-    if starts_at is None and status == "live" and fallback_live_start is not None:
-        starts_at = with_timezone(fallback_live_start, tz)
+
     if starts_at is None:
         return None
 
