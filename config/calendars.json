@@ -26,6 +26,22 @@
       "team_id": 624,
       "team_aliases": ["Paper Rex", "PRX"],
       "enabled": true
+    },
+    {
+      "slug": "thedoctorr",
+      "name": "theDoctorr VLR Matches",
+      "description": "All theDoctorr Valorant matches from VLR.gg.",
+      "type": "player",
+      "player_id": 3480,
+      "enabled": true
+    },
+    {
+      "slug": "ayumiii",
+      "name": "Ayumiii VLR Matches",
+      "description": "All Ayumiii Valorant matches from VLR.gg.",
+      "type": "player",
+      "player_id": 8175,
+      "enabled": true
     }
   ]
 }
