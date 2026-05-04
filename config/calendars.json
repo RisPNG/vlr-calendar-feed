@@ -1,0 +1,26 @@
+{
+  "site": {
+    "title": "VLR Calendar Feeds",
+    "description": "Public Valorant match calendars generated from VLR.gg.",
+    "base_url": ""
+  },
+  "settings": {
+    "timezone": "Asia/Kuala_Lumpur",
+    "default_match_duration_minutes": 120,
+    "upcoming_limit": 50,
+    "completed_limit": 0,
+    "include_completed": false,
+    "request_timeout_seconds": 20,
+    "allow_date_only": false
+  },
+  "calendars": [
+    {
+      "slug": "paper-rex",
+      "name": "Paper Rex VLR Matches",
+      "description": "Upcoming Paper Rex Valorant fixtures from VLR.gg.",
+      "type": "team",
+      "team_id": 624,
+      "enabled": true
+    }
+  ]
+}
