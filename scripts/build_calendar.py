@@ -17,7 +17,7 @@ import re
 import sys
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -70,6 +70,8 @@ class NormalizedMatch:
     starts_at: datetime
     status: str
     url: str
+    duration_minutes: int | None = None
+    best_of: str = ""
 
     @property
     def summary(self) -> str:
@@ -96,10 +98,23 @@ def get_attr(obj: Any, *names: str, default: Any = None) -> Any:
             value = obj[name]
             if value is not None:
                 return value
+
         if hasattr(obj, name):
             value = getattr(obj, name)
             if value is not None:
                 return value
+
+    # Wrapper support: annotate_match() can attach calendar-only metadata
+    # while preserving the original vlrdevapi object under _raw.
+    raw = None
+    if isinstance(obj, dict):
+        raw = obj.get("_raw")
+    elif hasattr(obj, "_raw"):
+        raw = getattr(obj, "_raw")
+
+    if raw is not None and raw is not obj:
+        return get_attr(raw, *names, default=default)
+
     return default
 
 
@@ -338,19 +353,19 @@ def annotate_match(raw: Any, event_name: str | None = None, event_id: int | None
     if isinstance(raw, dict):
         copy = dict(raw)
         if event_name:
-            copy.setdefault("_calendar_event_name", event_name)
+            copy["_calendar_event_name"] = event_name
         if event_id is not None:
-            copy.setdefault("_calendar_event_id", event_id)
+            copy["_calendar_event_id"] = event_id
         return copy
 
-    try:
-        if event_name:
-            setattr(raw, "_calendar_event_name", event_name)
-        if event_id is not None:
-            setattr(raw, "_calendar_event_id", event_id)
-    except Exception:
-        pass
-    return raw
+    # Do not rely on setattr(raw, ...). Some vlrdevapi model objects may not
+    # allow arbitrary custom attributes, which causes series/event feeds to lose
+    # the parent event name and fall back to "VALORANT".
+    return {
+        "_raw": raw,
+        "_calendar_event_name": event_name or "",
+        "_calendar_event_id": event_id,
+    }
 
 
 def discover_series_events(source: CalendarSource, settings: dict[str, Any]) -> list[SeriesEvent]:
@@ -600,6 +615,18 @@ def normalize_match(
         return None
 
     url = make_vlr_url(raw, match_id)
+    best_of = clean_text(
+        get_attr(
+            raw,
+            "_calendar_best_of",
+            "best_of",
+            "match_format",
+            "format",
+            "series_format",
+            default="",
+        ),
+        "",
+    )
 
     return NormalizedMatch(
         match_id=str(match_id),
@@ -609,6 +636,7 @@ def normalize_match(
         starts_at=starts_at,
         status=status,
         url=url,
+        best_of=best_of,
     )
 
 
@@ -748,8 +776,106 @@ def dedupe_matches(matches: Iterable[NormalizedMatch]) -> list[NormalizedMatch]:
     return sorted(seen.values(), key=lambda match: (match.starts_at, match.match_id))
 
 
+def best_of_key(value: Any) -> str | None:
+    text = clean_text(value).lower()
+    if not text:
+        return None
+
+    patterns = (
+        r"\bbo\s*([1357])\b",
+        r"\bbest\s*of\s*([1357])\b",
+        r"\b([1357])\s*maps?\b",
+        r"^([1357])$",
+    )
+    for pattern in patterns:
+        found = re.search(pattern, text, re.I)
+        if found:
+            return found.group(1)
+
+    return None
+
+
+def best_of_to_duration_minutes(best_of: Any, settings: dict[str, Any]) -> int | None:
+    key = best_of_key(best_of)
+    if key is None:
+        return None
+
+    duration_map = settings.get("best_of_duration_minutes", {})
+    if not isinstance(duration_map, dict):
+        duration_map = {}
+
+    default_map = {"1": 60, "3": 120, "5": 180}
+    value = duration_map.get(key, default_map.get(key))
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def fetch_best_of_from_series_info(match_id: str, settings: dict[str, Any], cache: dict[str, str]) -> str:
+    if match_id in cache:
+        return cache[match_id]
+
+    if vlr is None or not hasattr(vlr, "series") or not hasattr(vlr.series, "info"):
+        cache[match_id] = ""
+        return ""
+
+    try:
+        numeric_match_id = int(match_id)
+    except (TypeError, ValueError):
+        cache[match_id] = ""
+        return ""
+
+    try:
+        info = vlr.series.info(
+            match_id=numeric_match_id,
+            timeout=settings.get("request_timeout_seconds"),
+        )
+    except Exception as exc:
+        print(f"  Could not fetch BO format for match {match_id}: {exc}", file=sys.stderr)
+        cache[match_id] = ""
+        return ""
+
+    best_of = clean_text(get_attr(info, "best_of", default=""), "")
+    cache[match_id] = best_of
+    return best_of
+
+
+def apply_match_durations(matches: list[NormalizedMatch], settings: dict[str, Any]) -> list[NormalizedMatch]:
+    if not bool(settings.get("infer_match_duration_from_best_of", True)):
+        return matches
+
+    fetch_detail = bool(settings.get("fetch_best_of_from_match_detail", True))
+    fetch_max = int(settings.get("best_of_detail_fetch_max_matches", 250))
+    cache: dict[str, str] = {}
+    enriched: list[NormalizedMatch] = []
+    detail_fetches = 0
+
+    for match in matches:
+        best_of = match.best_of
+        duration_minutes = best_of_to_duration_minutes(best_of, settings)
+
+        if duration_minutes is None and fetch_detail and detail_fetches < fetch_max:
+            fetched_best_of = fetch_best_of_from_series_info(match.match_id, settings, cache)
+            detail_fetches += 1
+            if fetched_best_of:
+                best_of = fetched_best_of
+                duration_minutes = best_of_to_duration_minutes(best_of, settings)
+
+        enriched.append(
+            replace(
+                match,
+                best_of=best_of,
+                duration_minutes=duration_minutes,
+            )
+        )
+
+    return enriched
+
+
 def build_ical_calendar(source: CalendarSource, matches: list[NormalizedMatch], settings: dict[str, Any]) -> bytes:
-    duration = timedelta(minutes=int(settings.get("default_match_duration_minutes", 120)))
+    default_duration_minutes = int(settings.get("default_match_duration_minutes", 120))
     ttl_hours = int(settings.get("published_ttl_hours", 2))
     generated_at = datetime.now(timezone.utc)
 
@@ -772,7 +898,7 @@ def build_ical_calendar(source: CalendarSource, matches: list[NormalizedMatch], 
                 f"UID:{ics_text(f'vlr-match-{match.match_id}@vlr-calendar-feed')}",
                 f"DTSTAMP:{format_ics_datetime(generated_at)}",
                 f"DTSTART:{format_ics_datetime(match.starts_at.astimezone(timezone.utc))}",
-                f"DTEND:{format_ics_datetime((match.starts_at + duration).astimezone(timezone.utc))}",
+                f"DTEND:{format_ics_datetime((match.starts_at + timedelta(minutes=match.duration_minutes or default_duration_minutes)).astimezone(timezone.utc))}",
                 f"SUMMARY:{ics_text(match.summary)}",
                 f"DESCRIPTION:{ics_text(build_description(match))}",
                 f"URL:{ics_text(match.url)}",
@@ -820,16 +946,22 @@ def fold_ics_line(line: str, limit: int = 75) -> str:
 
 
 def build_description(match: NormalizedMatch) -> str:
-    return "\n".join(
-        [
-            match.url,
-            "",
-            f"Event: {match.event_name}",
-            f"Match: {match.team1_name} vs {match.team2_name}",
-            f"Status: {match.status}",
-            "Source: VLR.gg",
-        ]
-    )
+    lines = [
+        match.url,
+        "",
+        f"Event: {match.event_name}",
+        f"Match: {match.team1_name} vs {match.team2_name}",
+        f"Status: {match.status}",
+    ]
+
+    if match.best_of:
+        lines.append(f"Format: {match.best_of}")
+
+    if match.duration_minutes is not None:
+        lines.append(f"Calendar duration: {match.duration_minutes} minutes")
+
+    lines.append("Source: VLR.gg")
+    return "\n".join(lines)
 
 
 def write_index(config: dict[str, Any], built_calendars: list[dict[str, Any]]) -> None:
@@ -941,6 +1073,7 @@ def build() -> int:
             is not None
         ]
         matches = dedupe_matches(filter_normalized_matches(normalized, settings))
+        matches = apply_match_durations(matches, settings)
         ics_bytes = build_ical_calendar(source, matches, settings)
 
         output_path = PUBLIC_DIR / f"{source.slug}.ics"

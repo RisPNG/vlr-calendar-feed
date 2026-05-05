@@ -7,17 +7,25 @@
   "settings": {
     "timezone": "Asia/Kuala_Lumpur",
     "default_match_duration_minutes": 120,
-    "upcoming_limit": 999,
+    "upcoming_limit": 25565,
     "include_live": true,
-    "live_limit": 999,
+    "live_limit": 25565,
     "live_match_start_fallback": "now",
-    "completed_limit": 999,
+    "completed_limit": 25565,
     "include_completed": true,
-    "event_match_limit": 999,
-    "series_event_limit": 999,
-    "request_timeout_seconds": 20,
+    "event_match_limit": 25565,
+    "series_event_limit": 25565,
+    "request_timeout_seconds": 60,
     "allow_date_only": false,
-    "published_ttl_hours": 2
+    "published_ttl_hours": 2,
+    "infer_match_duration_from_best_of": true,
+    "fetch_best_of_from_match_detail": true,
+    "best_of_detail_fetch_max_matches": 25565,
+    "best_of_duration_minutes": {
+      "1": 60,
+      "3": 120,
+      "5": 180
+    }
   },
   "calendars": [
     {
@@ -51,7 +59,10 @@
       "description": "All Paper Rex Valorant matches from VLR.gg.",
       "type": "team",
       "team_id": 624,
-      "team_aliases": ["Paper Rex", "PRX"],
+      "team_aliases": [
+        "Paper Rex",
+        "PRX"
+      ],
       "enabled": true
     },
     {

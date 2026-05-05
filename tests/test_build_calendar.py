@@ -121,3 +121,77 @@ def test_build_ical_contains_summary_and_url():
 
     assert "SUMMARY:VCT Pacific | Paper Rex vs DRX" in ics
     assert "URL:https://www.vlr.gg/123/test" in ics
+
+
+def test_annotated_object_preserves_parent_event_name():
+    raw = RawMatch(
+        match_id=789,
+        player_team=Team(name="Paper Rex", tag="PRX"),
+        opponent_team=Team(name="DRX"),
+        event="",
+        date=date(2026, 5, 4),
+        time="20:00",
+    )
+
+    annotated = build.annotate_match(raw, event_name="VCT 2026: Pacific Stage 1", event_id=2775)
+    match = build.normalize_match(annotated, tz=ZoneInfo("Asia/Kuala_Lumpur"))
+
+    assert match is not None
+    assert match.summary == "VCT 2026: Pacific Stage 1 | Paper Rex (PRX) vs DRX"
+
+
+def test_best_of_duration_mapping():
+    settings = {
+        "best_of_duration_minutes": {
+            "1": 60,
+            "3": 120,
+            "5": 180,
+        }
+    }
+
+    assert build.best_of_to_duration_minutes("BO1", settings) == 60
+    assert build.best_of_to_duration_minutes("Best of 3", settings) == 120
+    assert build.best_of_to_duration_minutes("bo5", settings) == 180
+    assert build.best_of_to_duration_minutes("unknown", settings) is None
+
+
+def test_ical_uses_match_specific_duration_with_default_fallback():
+    source = build.CalendarSource(
+        slug="test",
+        name="Test Calendar",
+        description="Test Desc",
+        source_type="event",
+        enabled=True,
+    )
+    start = datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc)
+    bo1 = build.NormalizedMatch(
+        match_id="bo1",
+        event_name="Test Event",
+        team1_name="A",
+        team2_name="B",
+        starts_at=start,
+        status="upcoming",
+        url="https://www.vlr.gg/1/test",
+        duration_minutes=60,
+        best_of="BO1",
+    )
+    fallback = build.NormalizedMatch(
+        match_id="fallback",
+        event_name="Test Event",
+        team1_name="C",
+        team2_name="D",
+        starts_at=start,
+        status="upcoming",
+        url="https://www.vlr.gg/2/test",
+    )
+
+    ics = build.build_ical_calendar(
+        source,
+        [bo1, fallback],
+        {"published_ttl_hours": 2, "default_match_duration_minutes": 120},
+    ).decode("utf-8")
+
+    assert "UID:vlr-match-bo1@vlr-calendar-feed" in ics
+    assert "DTEND:20260504T130000Z" in ics
+    assert "UID:vlr-match-fallback@vlr-calendar-feed" in ics
+    assert "DTEND:20260504T140000Z" in ics

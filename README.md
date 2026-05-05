@@ -128,6 +128,29 @@ Important settings in `config/calendars.json`:
 - `include_completed`: include completed matches.
 - `include_live`: include live matches.
 - `live_match_start_fallback`: use `now` for live matches that do not expose a start time.
+- `default_match_duration_minutes`: fallback calendar event duration when match format cannot be detected.
+- `infer_match_duration_from_best_of`: when `true`, use BO format before the fallback duration.
+- `best_of_duration_minutes`: map BO values to event durations, for example BO1 = 60, BO3 = 120, BO5 = 180.
+- `fetch_best_of_from_match_detail`: when BO is not present in the match list response, fetch `vlr.series.info(match_id=...)` to try reading `best_of`.
+- `best_of_detail_fetch_max_matches`: caps extra match-detail requests per calendar run to avoid overly slow global/series feeds.
+
+Example duration settings:
+
+```json
+{
+  "default_match_duration_minutes": 120,
+  "infer_match_duration_from_best_of": true,
+  "fetch_best_of_from_match_detail": true,
+  "best_of_detail_fetch_max_matches": 250,
+  "best_of_duration_minutes": {
+    "1": 60,
+    "3": 120,
+    "5": 180
+  }
+}
+```
+
+If BO format cannot be read, the generator still falls back to `default_match_duration_minutes`.
 
 ## Google Calendar cache note
 
