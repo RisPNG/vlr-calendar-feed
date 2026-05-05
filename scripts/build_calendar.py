@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Build static iCalendar feeds from VLR.gg data via vlrdevapi."""
+"""Build static iCalendar feeds from VLR.gg data via vlrdevapi.
+
+Supported calendar source types:
+- team: matches for one VLR team ID
+- player: completed player history plus upcoming/live matches from current teams
+- event: all matches for one VLR event ID
+- series: all matches for every event linked from one VLR /series/<id>/ page
+- global: global upcoming/live/completed match feeds where supported
+"""
 
 from __future__ import annotations
 
@@ -7,6 +15,8 @@ import html
 import json
 import re
 import sys
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -17,7 +27,6 @@ try:
     import vlrdevapi as vlr
 except Exception:  # pragma: no cover - live dependency is not needed for unit tests
     vlr = None  # type: ignore[assignment]
-
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT_DIR / "config" / "calendars.json"
@@ -34,7 +43,22 @@ class CalendarSource:
     enabled: bool
     team_id: int | None = None
     player_id: int | None = None
+    event_id: int | None = None
+    event_ids: list[int] = field(default_factory=list)
+    series_id: int | None = None
+    series_slug: str = ""
+    series_url: str = ""
+    stage: str | None = None
     team_aliases: list[str] = field(default_factory=list)
+    event_name_include: list[str] = field(default_factory=list)
+    event_name_exclude: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class SeriesEvent:
+    event_id: int
+    name: str
+    url: str
 
 
 @dataclass(frozen=True)
@@ -89,16 +113,22 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
 
 def load_sources(config: dict[str, Any]) -> list[CalendarSource]:
     sources: list[CalendarSource] = []
+
     for item in config.get("calendars", []):
         if not isinstance(item, dict):
             continue
+
         slug = clean_slug(item.get("slug") or item.get("name") or "calendar")
         source_type = clean_text(item.get("type"), "team").lower()
-        aliases = item.get("team_aliases", [])
-        if isinstance(aliases, str):
-            aliases = [aliases]
-        if not isinstance(aliases, list):
-            aliases = []
+
+        aliases = as_clean_list(item.get("team_aliases", []))
+        event_name_include = as_clean_list(
+            item.get("event_name_include", item.get("include_event_names", []))
+        )
+        event_name_exclude = as_clean_list(
+            item.get("event_name_exclude", item.get("exclude_event_names", []))
+        )
+
         sources.append(
             CalendarSource(
                 slug=slug,
@@ -108,10 +138,44 @@ def load_sources(config: dict[str, Any]) -> list[CalendarSource]:
                 enabled=bool(item.get("enabled", True)),
                 team_id=parse_optional_int(item.get("team_id")),
                 player_id=parse_optional_int(item.get("player_id")),
-                team_aliases=[clean_text(alias) for alias in aliases if clean_text(alias)],
+                event_id=parse_optional_int(item.get("event_id")),
+                event_ids=parse_int_list(item.get("event_ids", [])),
+                series_id=parse_optional_int(item.get("series_id")),
+                series_slug=clean_text(item.get("series_slug"), ""),
+                series_url=clean_text(item.get("series_url"), ""),
+                stage=clean_text(item.get("stage"), "") or None,
+                team_aliases=aliases,
+                event_name_include=event_name_include,
+                event_name_exclude=event_name_exclude,
             )
         )
+
     return sources
+
+
+def as_clean_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    return [clean_text(item) for item in value if clean_text(item)]
+
+
+def parse_int_list(value: Any) -> list[int]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, (int, str)):
+        value = [value]
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    output: list[int] = []
+    for item in value:
+        parsed = parse_optional_int(item)
+        if parsed is not None:
+            output.append(parsed)
+    return output
 
 
 def parse_optional_int(value: Any) -> int | None:
@@ -135,10 +199,12 @@ def ensure_vlr_available() -> None:
 
 def fetch_matches_for_source(source: CalendarSource, settings: dict[str, Any]) -> list[Any]:
     ensure_vlr_available()
+
     timeout = settings.get("request_timeout_seconds")
     upcoming_limit = int(settings.get("upcoming_limit", 50))
     completed_limit = int(settings.get("completed_limit", 0))
     live_limit = int(settings.get("live_limit", 50))
+    event_match_limit = int(settings.get("event_match_limit", max(upcoming_limit, completed_limit, 50)))
     include_completed = bool(settings.get("include_completed", False))
     include_live = bool(settings.get("include_live", False))
 
@@ -149,11 +215,7 @@ def fetch_matches_for_source(source: CalendarSource, settings: dict[str, Any]) -
             raise ValueError(f"Calendar {source.slug!r} is type=team but has no team_id.")
 
         matches.extend(
-            vlr.teams.upcoming_matches(
-                team_id=source.team_id,
-                limit=upcoming_limit,
-                timeout=timeout,
-            )
+            vlr.teams.upcoming_matches(team_id=source.team_id, limit=upcoming_limit, timeout=timeout)
         )
 
         if include_live:
@@ -195,11 +257,7 @@ def fetch_matches_for_source(source: CalendarSource, settings: dict[str, Any]) -
             )
 
             matches.extend(
-                vlr.teams.upcoming_matches(
-                    team_id=team_id,
-                    limit=upcoming_limit,
-                    timeout=timeout,
-                )
+                vlr.teams.upcoming_matches(team_id=team_id, limit=upcoming_limit, timeout=timeout)
             )
 
             if include_live:
@@ -209,12 +267,33 @@ def fetch_matches_for_source(source: CalendarSource, settings: dict[str, Any]) -
 
         if include_completed and completed_limit > 0:
             matches.extend(
-                vlr.players.matches(
-                    player_id=source.player_id,
-                    limit=completed_limit,
-                    timeout=timeout,
-                )
+                vlr.players.matches(player_id=source.player_id, limit=completed_limit, timeout=timeout)
             )
+        return matches
+
+    if source.source_type == "event":
+        event_ids = source.event_ids or ([source.event_id] if source.event_id is not None else [])
+        if not event_ids:
+            raise ValueError(f"Calendar {source.slug!r} is type=event but has no event_id or event_ids.")
+        for event_id in event_ids:
+            matches.extend(fetch_event_matches(event_id, source, settings, limit=event_match_limit))
+        return matches
+
+    if source.source_type == "series":
+        events = discover_series_events(source, settings)
+        if not events:
+            raise ValueError(f"Calendar {source.slug!r} found no events on its VLR series page.")
+
+        for event in events:
+            print(f"  Fetching event {event.event_id}: {event.name}")
+            event_matches = fetch_event_matches(
+                event.event_id,
+                source,
+                settings,
+                limit=event_match_limit,
+                fallback_event_name=event.name,
+            )
+            matches.extend(event_matches)
         return matches
 
     if source.source_type == "global":
@@ -226,6 +305,143 @@ def fetch_matches_for_source(source: CalendarSource, settings: dict[str, Any]) -
         return matches
 
     raise ValueError(f"Unsupported calendar type for {source.slug!r}: {source.source_type!r}")
+
+
+def fetch_event_matches(
+    event_id: int,
+    source: CalendarSource,
+    settings: dict[str, Any],
+    limit: int | None,
+    fallback_event_name: str | None = None,
+) -> list[Any]:
+    timeout = settings.get("request_timeout_seconds")
+    stage = source.stage
+    event_name = fallback_event_name or event_name_from_api(event_id, timeout=timeout)
+
+    kwargs: dict[str, Any] = {"event_id": event_id, "limit": limit, "timeout": timeout}
+    if stage:
+        kwargs["stage"] = stage
+
+    matches = vlr.events.matches(**kwargs)
+    return [annotate_match(match, event_name=event_name, event_id=event_id) for match in matches]
+
+
+def event_name_from_api(event_id: int, timeout: Any = None) -> str:
+    try:
+        info = vlr.events.info(event_id=event_id, timeout=timeout)
+    except Exception:
+        return ""
+    return clean_text(get_attr(info, "name", default=""), "")
+
+
+def annotate_match(raw: Any, event_name: str | None = None, event_id: int | None = None) -> Any:
+    if isinstance(raw, dict):
+        copy = dict(raw)
+        if event_name:
+            copy.setdefault("_calendar_event_name", event_name)
+        if event_id is not None:
+            copy.setdefault("_calendar_event_id", event_id)
+        return copy
+
+    try:
+        if event_name:
+            setattr(raw, "_calendar_event_name", event_name)
+        if event_id is not None:
+            setattr(raw, "_calendar_event_id", event_id)
+    except Exception:
+        pass
+    return raw
+
+
+def discover_series_events(source: CalendarSource, settings: dict[str, Any]) -> list[SeriesEvent]:
+    timeout = settings.get("request_timeout_seconds", 20)
+    limit = parse_optional_int(settings.get("series_event_limit"))
+    url = series_url_for_source(source)
+    html_text = fetch_text(url, timeout=timeout)
+    events = extract_series_events(html_text)
+    events = filter_series_events(events, source)
+
+    if limit is not None:
+        events = events[:limit]
+
+    return events
+
+
+def series_url_for_source(source: CalendarSource) -> str:
+    if source.series_url:
+        return source.series_url
+    if source.series_id is None:
+        raise ValueError(f"Calendar {source.slug!r} is type=series but has no series_id or series_url.")
+    suffix = f"/{source.series_slug.strip('/')}" if source.series_slug else ""
+    return f"{VLR_BASE_URL}/series/{source.series_id}{suffix}"
+
+
+def fetch_text(url: str, timeout: Any = None) -> str:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "vlr-calendar-feed/1.0 (+https://github.com/RisPNG/vlr-calendar-feed)",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=float(timeout or 20)) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            return response.read().decode(charset, errors="replace")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Could not fetch VLR series page {url}: {exc}") from exc
+
+
+def extract_series_events(page_html: str) -> list[SeriesEvent]:
+    events: list[SeriesEvent] = []
+    seen: set[int] = set()
+
+    pattern = re.compile(
+        r"<a\b[^>]*href=[\"'](?P<href>/event/(?P<id>\d+)/(?P<slug>[^\"'#?]+))[^\"']*[\"'][^>]*>(?P<body>.*?)</a>",
+        re.I | re.S,
+    )
+
+    for match in pattern.finditer(page_html):
+        event_id = parse_optional_int(match.group("id"))
+        if event_id is None or event_id in seen:
+            continue
+
+        href = html.unescape(match.group("href"))
+        body = match.group("body")
+        text = clean_html_text(body)
+        slug = html.unescape(match.group("slug"))
+        name = text or slug_to_title(slug)
+
+        seen.add(event_id)
+        events.append(SeriesEvent(event_id=event_id, name=name, url=f"{VLR_BASE_URL}{href}"))
+
+    return events
+
+
+def clean_html_text(value: str) -> str:
+    text = re.sub(r"<script\b.*?</script>", " ", value, flags=re.I | re.S)
+    text = re.sub(r"<style\b.*?</style>", " ", text, flags=re.I | re.S)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return clean_text(html.unescape(text), "")
+
+
+def slug_to_title(slug: str) -> str:
+    return clean_text(slug.replace("-", " ").title(), "VLR Event")
+
+
+def filter_series_events(events: list[SeriesEvent], source: CalendarSource) -> list[SeriesEvent]:
+    include = [normalize_name(item) for item in source.event_name_include]
+    exclude = [normalize_name(item) for item in source.event_name_exclude]
+
+    filtered: list[SeriesEvent] = []
+    for event in events:
+        name = normalize_name(event.name)
+        if include and not any(token in name for token in include):
+            continue
+        if exclude and any(token in name for token in exclude):
+            continue
+        filtered.append(event)
+    return filtered
 
 
 def filter_live_matches_for_team(live_matches: Iterable[Any], source: CalendarSource) -> list[Any]:
@@ -272,12 +488,14 @@ def team_name_matches_source(team_name: Any, source: CalendarSource) -> bool:
 
 def current_team_ids_from_profile(profile: Any) -> list[int]:
     ids: list[int] = []
+
     for attr_name in ("current_teams", "teams", "team"):
         value = get_attr(profile, attr_name)
         if not value:
             continue
         if not isinstance(value, (list, tuple, set)):
             value = [value]
+
         for team in value:
             role = clean_text(get_attr(team, "role", default="")).lower()
             left_date = get_attr(team, "left_date", "end_date", default=None)
@@ -286,6 +504,7 @@ def current_team_ids_from_profile(profile: Any) -> list[int]:
                 continue
             if left_date is None and (not role or role in {"player", "active", "current"}):
                 ids.append(team_id)
+
     return ids
 
 
@@ -312,7 +531,21 @@ def team_name_from_obj(team: Any, fallback: str = "TBD") -> str:
 
     if name and tag and name != tag:
         return f"{name} ({tag})"
+
     return name or tag or fallback
+
+
+def match_id_from_raw(raw: Any) -> str | None:
+    match_id = get_attr(raw, "match_id", "id", default=None)
+    if match_id not in (None, ""):
+        return str(match_id)
+
+    url = clean_text(get_attr(raw, "url", "match_url", "link", default=""), "")
+    found = re.search(r"/(\d+)(?:/|$)", url)
+    if found:
+        return found.group(1)
+
+    return None
 
 
 def normalize_match(
@@ -321,16 +554,13 @@ def normalize_match(
     allow_date_only: bool = False,
     fallback_live_start: datetime | None = None,
 ) -> NormalizedMatch | None:
-    match_id = get_attr(raw, "match_id", "id", "series_id")
-    if match_id in (None, ""):
+    match_id = match_id_from_raw(raw)
+    if not match_id:
         return None
 
-    # Team/global match objects usually use team1/team2.
-    # Player match-history objects use player_team/opponent_team.
     team1 = get_attr(raw, "team1", "player_team", default=None)
     team2 = get_attr(raw, "team2", "opponent_team", default=None)
 
-    # Some live/global match objects expose teams as a list.
     teams = get_attr(raw, "teams", default=None)
     if teams and isinstance(teams, (list, tuple)):
         team1 = team1 or (teams[0] if len(teams) >= 1 else None)
@@ -342,6 +572,7 @@ def normalize_match(
     event_name = clean_text(
         get_attr(
             raw,
+            "_calendar_event_name",
             "event",
             "event_name",
             "tournament_name",
@@ -354,21 +585,21 @@ def normalize_match(
 
     status = clean_text(get_attr(raw, "status", default="upcoming"), "upcoming").lower()
     raw_time_text = clean_text(get_attr(raw, "time", "time_text", default="")).lower()
-
     if raw_time_text == "live":
         status = "live"
 
-    result = clean_text(get_attr(raw, "result", default=""))
+    result = clean_text(get_attr(raw, "result", default=""), "")
     if result and status == "upcoming":
         status = "completed"
 
     starts_at = parse_match_datetime(raw, tz=tz, allow_date_only=allow_date_only)
-    if starts_at is None and status == "live" and fallback_live_start is not None:
+    if starts_at is None and status in {"live", "ongoing"} and fallback_live_start is not None:
         starts_at = with_timezone(fallback_live_start, tz)
+
     if starts_at is None:
         return None
 
-    url = make_vlr_url(raw, str(match_id))
+    url = make_vlr_url(raw, match_id)
 
     return NormalizedMatch(
         match_id=str(match_id),
@@ -409,7 +640,10 @@ def parse_match_datetime(raw: Any, tz: ZoneInfo, allow_date_only: bool = False) 
         parsed = parse_datetime_string(candidate, tz=tz)
         if parsed is None:
             continue
-        has_explicit_time = bool(re.search(r"\d{1,2}:\d{2}|\d{1,2}\s*(?:am|pm)", candidate, re.I))
+
+        has_explicit_time = bool(
+            re.search(r"\d{1,2}:\d{2}|\d{1,2}\s*(?:am|pm)", candidate, re.I)
+        )
         if not allow_date_only and parsed.time() == time(0, 0) and not has_explicit_time:
             continue
         return parsed
@@ -422,7 +656,7 @@ def parse_time_value(value: Any) -> time | None:
         return value
 
     text = clean_text(value)
-    if not text or text.lower() in {"tbd", "live", "completed"}:
+    if not text or text.lower() in {"tbd", "live", "completed", "ongoing"}:
         return None
 
     formats = ("%H:%M", "%I:%M %p", "%I%p", "%H%M")
@@ -436,7 +670,7 @@ def parse_time_value(value: Any) -> time | None:
 
 def parse_datetime_string(value: str, tz: ZoneInfo) -> datetime | None:
     text = clean_text(value)
-    if not text or text.lower() in {"tbd", "live", "completed"}:
+    if not text or text.lower() in {"tbd", "live", "completed", "ongoing"}:
         return None
 
     try:
@@ -453,6 +687,7 @@ def parse_datetime_string(value: str, tz: ZoneInfo) -> datetime | None:
         "%B %d %Y %H:%M",
         "%B %d %Y %I:%M %p",
     )
+
     for fmt in formats:
         try:
             return datetime.strptime(text, fmt).replace(tzinfo=tz)
@@ -468,7 +703,7 @@ def with_timezone(value: datetime, tz: ZoneInfo) -> datetime:
 
 
 def make_vlr_url(raw: Any, match_id: str) -> str:
-    url = clean_text(get_attr(raw, "url", "match_url", "link", default=""))
+    url = clean_text(get_attr(raw, "url", "match_url", "link", default=""), "")
     if url.startswith("http://") or url.startswith("https://"):
         return url
     if url.startswith("/"):
@@ -476,9 +711,24 @@ def make_vlr_url(raw: Any, match_id: str) -> str:
     return f"{VLR_BASE_URL}/{match_id}"
 
 
+def filter_normalized_matches(matches: Iterable[NormalizedMatch], settings: dict[str, Any]) -> list[NormalizedMatch]:
+    include_completed = bool(settings.get("include_completed", False))
+    include_live = bool(settings.get("include_live", False))
+
+    output: list[NormalizedMatch] = []
+    for match in matches:
+        status = match.status.lower()
+        if status == "completed" and not include_completed:
+            continue
+        if status in {"live", "ongoing"} and not include_live:
+            continue
+        output.append(match)
+    return output
+
+
 def dedupe_matches(matches: Iterable[NormalizedMatch]) -> list[NormalizedMatch]:
     seen: dict[str, NormalizedMatch] = {}
-    status_priority = {"live": 3, "completed": 2, "upcoming": 1}
+    status_priority = {"live": 4, "ongoing": 4, "completed": 3, "upcoming": 2, "scheduled": 1}
 
     for match in matches:
         existing = seen.get(match.match_id)
@@ -563,6 +813,7 @@ def fold_ics_line(line: str, limit: int = 75) -> str:
             current = char
         else:
             current = test
+
     if current:
         output.append(current if not output else " " + current)
     return "\r\n".join(output)
@@ -663,17 +914,16 @@ def write_nojekyll() -> None:
 def build() -> int:
     config = load_config()
     settings = config.get("settings", {}) if isinstance(config.get("settings"), dict) else {}
-
     tz = ZoneInfo(clean_text(settings.get("timezone"), "UTC"))
     allow_date_only = bool(settings.get("allow_date_only", False))
+
     live_start_fallback = clean_text(settings.get("live_match_start_fallback"), "now").lower()
     fallback_live_start = datetime.now(tz) if live_start_fallback == "now" else None
 
     sources = [source for source in load_sources(config) if source.enabled]
-
     PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
-    built_calendars: list[dict[str, Any]] = []
 
+    built_calendars: list[dict[str, Any]] = []
     for source in sources:
         print(f"Building {source.slug} ({source.source_type})...")
         raw_matches = fetch_matches_for_source(source, settings)
@@ -690,8 +940,9 @@ def build() -> int:
             )
             is not None
         ]
-        matches = dedupe_matches(normalized)
+        matches = dedupe_matches(filter_normalized_matches(normalized, settings))
         ics_bytes = build_ical_calendar(source, matches, settings)
+
         output_path = PUBLIC_DIR / f"{source.slug}.ics"
         output_path.write_bytes(ics_bytes)
         built_calendars.append(

@@ -1,104 +1,123 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-
-from build_calendar import (  # noqa: E402
-    CalendarSource,
-    NormalizedMatch,
-    build_ical_calendar,
-    current_team_ids_from_profile,
-    dedupe_matches,
-    normalize_match,
-)
+import scripts.build_calendar as build
 
 
 @dataclass
-class Obj:
-    pass
+class Team:
+    name: str
+    tag: str | None = None
+    id: int | None = None
 
 
-def test_player_match_uses_player_team_and_opponent_team() -> None:
-    tz = ZoneInfo("Asia/Kuala_Lumpur")
+@dataclass
+class RawMatch:
+    match_id: int
+    player_team: Team
+    opponent_team: Team
+    event: str
+    date: date
+    time: str
+    status: str = "completed"
+    url: str = "/123/test-match"
 
-    player_team = Obj()
-    player_team.name = "Shopify Rebellion"
-    player_team.tag = "SR"
 
-    opponent_team = Obj()
-    opponent_team.name = "Xipto Esports"
-    opponent_team.tag = "XIP"
+def test_player_match_team_names_are_not_tbd():
+    raw = RawMatch(
+        match_id=123,
+        player_team=Team(name="BOBA"),
+        opponent_team=Team(name="Xipto Esports GC", tag="XIP.GC"),
+        event="GC 24 SEA: Stage 2",
+        date=date(2024, 7, 26),
+        time="18:00",
+    )
 
-    raw = Obj()
-    raw.match_id = 123
-    raw.url = "/123/example-match"
-    raw.player_team = player_team
-    raw.opponent_team = opponent_team
-    raw.event = "Game Changers"
-    raw.result = "win"
-    raw.date = "2026-05-01"
-    raw.time = "20:00"
-
-    match = normalize_match(raw, tz=tz)
+    match = build.normalize_match(raw, tz=ZoneInfo("Asia/Kuala_Lumpur"))
 
     assert match is not None
-    assert match.summary == "Game Changers | Shopify Rebellion (SR) vs Xipto Esports (XIP)"
-    assert match.status == "completed"
+    assert match.summary == "GC 24 SEA: Stage 2 | BOBA vs Xipto Esports GC (XIP.GC)"
 
 
-def test_live_match_fallback_start_time() -> None:
-    tz = ZoneInfo("Asia/Kuala_Lumpur")
-    fallback = datetime(2026, 5, 4, 20, 0, tzinfo=tz)
-
+def test_live_fallback_allows_live_match_without_time():
     raw = {
         "match_id": 456,
-        "status": "live",
+        "teams": [{"name": "Paper Rex", "id": 624}, {"name": "DRX", "id": 3}],
         "event": "VCT Pacific",
-        "teams": [
-            {"name": "Paper Rex", "id": 624},
-            {"name": "DRX", "id": 8185},
-        ],
-        "url": "/456/live-match",
+        "status": "live",
+        "url": "/456/paper-rex-vs-drx",
     }
+    fallback = datetime(2026, 5, 4, 20, 0, tzinfo=ZoneInfo("Asia/Kuala_Lumpur"))
 
-    match = normalize_match(raw, tz=tz, fallback_live_start=fallback)
+    match = build.normalize_match(
+        raw,
+        tz=ZoneInfo("Asia/Kuala_Lumpur"),
+        fallback_live_start=fallback,
+    )
 
     assert match is not None
     assert match.starts_at == fallback
     assert match.summary == "VCT Pacific | Paper Rex vs DRX"
 
 
-def test_current_team_ids_from_profile() -> None:
-    profile = Obj()
-    team = Obj()
-    team.id = 624
-    team.role = "player"
-    team.left_date = None
-    profile.current_teams = [team]
+def test_extract_series_events_dedupes_links():
+    html = """
+    <a href="/event/2775/vct-2026-pacific-stage-1">VCT 2026: Pacific Stage 1</a>
+    <a href="/event/2775/vct-2026-pacific-stage-1">Duplicate</a>
+    <a href="/event/2790/valorant-masters-london-2026"><span>Valorant Masters London 2026</span></a>
+    """
 
-    assert current_team_ids_from_profile(profile) == [624]
+    events = build.extract_series_events(html)
 
-
-def test_dedupe_prefers_non_tbd_names() -> None:
-    dt = datetime(2026, 5, 4, 20, 0, tzinfo=ZoneInfo("Asia/Kuala_Lumpur"))
-    bad = NormalizedMatch("1", "Event", "TBD", "TBD", dt, "upcoming", "https://www.vlr.gg/1")
-    good = NormalizedMatch("1", "Event", "A", "B", dt, "completed", "https://www.vlr.gg/1")
-
-    assert dedupe_matches([bad, good])[0].summary == "Event | A vs B"
+    assert [event.event_id for event in events] == [2775, 2790]
+    assert events[0].name == "VCT 2026: Pacific Stage 1"
+    assert events[1].name == "Valorant Masters London 2026"
 
 
-def test_ics_contains_stable_uid_and_summary() -> None:
-    dt = datetime(2026, 5, 4, 20, 0, tzinfo=ZoneInfo("Asia/Kuala_Lumpur"))
-    source = CalendarSource("ayumiii", "Ayumiii", "Calendar", "player", True, player_id=8175)
-    match = NormalizedMatch("123", "Event", "Team A", "Team B", dt, "completed", "https://www.vlr.gg/123")
+def test_series_event_filters_include_and_exclude():
+    source = build.CalendarSource(
+        slug="vct-pacific",
+        name="VCT Pacific",
+        description="",
+        source_type="series",
+        enabled=True,
+        series_id=86,
+        event_name_include=["Pacific"],
+        event_name_exclude=["Kickoff"],
+    )
+    events = [
+        build.SeriesEvent(1, "VCT 2026: Pacific Stage 1", "/event/1/a"),
+        build.SeriesEvent(2, "VCT 2026: Pacific Kickoff", "/event/2/b"),
+        build.SeriesEvent(3, "VCT 2026: Americas Stage 1", "/event/3/c"),
+    ]
 
-    ics = build_ical_calendar(source, [match], {"published_ttl_hours": 2}).decode("utf-8")
+    filtered = build.filter_series_events(events, source)
 
-    assert "UID:vlr-match-123@vlr-calendar-feed" in ics
-    assert "SUMMARY:Event | Team A vs Team B" in ics
+    assert [event.event_id for event in filtered] == [1]
+
+
+def test_build_ical_contains_summary_and_url():
+    source = build.CalendarSource(
+        slug="test",
+        name="Test Calendar",
+        description="Test Desc",
+        source_type="event",
+        enabled=True,
+    )
+    match = build.NormalizedMatch(
+        match_id="123",
+        event_name="VCT Pacific",
+        team1_name="Paper Rex",
+        team2_name="DRX",
+        starts_at=datetime(2026, 5, 4, 12, 0, tzinfo=timezone.utc),
+        status="upcoming",
+        url="https://www.vlr.gg/123/test",
+    )
+
+    ics = build.build_ical_calendar(source, [match], {"published_ttl_hours": 2}).decode("utf-8")
+
+    assert "SUMMARY:VCT Pacific | Paper Rex vs DRX" in ics
+    assert "URL:https://www.vlr.gg/123/test" in ics

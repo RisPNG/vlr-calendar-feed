@@ -1,108 +1,146 @@
 # VLR Calendar Feed
 
-Generate public `.ics` calendar feeds from VLR.gg match data using `vlrdevapi`, then deploy them to GitHub Pages with scheduled GitHub Actions.
+Generate public `.ics` feeds from VLR.gg and publish them with GitHub Pages.
 
-This repo is designed for fixture calendars. Event titles look like:
+The repo supports these calendar source types:
 
-```text
-VCT Pacific | PRX vs DRX
-```
+- `team` - a team's upcoming, live, and optionally completed matches.
+- `player` - a player's completed match history plus upcoming/live matches from their current team.
+- `event` - all matches from one VLR event ID.
+- `series` - all matches from every event linked from a VLR series page, such as VCT 2026 or Game Changers 2026.
+- `global` - global upcoming/live/completed feeds where supported by vlrdevapi.
 
-Each event description contains the VLR.gg match link.
+## Quick deploy
 
-## Current config
+1. Push this repo to GitHub.
+2. In GitHub, open **Settings -> Pages** and set **Source** to **GitHub Actions**.
+3. Edit `config/calendars.json`.
+4. Run **Actions -> Build and deploy calendar feeds -> Run workflow**.
+5. Subscribe to the generated `.ics` URL from Google Calendar using **Other calendars -> + -> From URL**.
 
-The included `config/calendars.json` builds:
-
-- `paper-rex.ics`
-- `thedoctorr.ics`
-- `ayumiii.ics`
-
-It includes upcoming, live, and completed matches. Player completed matches are normalized from `player_team` and `opponent_team`, so they should not render as `TBD vs TBD` when the data has team names.
-
-## Deploy
-
-1. Push this repo to GitHub on `master`.
-2. Go to **Settings -> Pages -> Build and deployment -> Source**.
-3. Select **GitHub Actions**.
-4. Go to **Actions -> Build and deploy calendar feeds -> Run workflow**.
-
-The workflow runs every 2 hours:
-
-```yaml
-- cron: "17 */2 * * *"
-```
-
-GitHub cron uses UTC.
-
-## Subscribe
-
-Use the GitHub Pages URL, not the GitHub repo URL:
+Example feed URL:
 
 ```text
-https://rispng.github.io/vlr-calendar-feed/ayumiii.ics
+https://<username>.github.io/<repo>/paper-rex.ics
 ```
 
-In Google Calendar desktop:
+## Series calendars
+
+VLR series pages have URLs like:
 
 ```text
-Other calendars -> + -> From URL -> paste the .ics URL -> Add calendar
+https://www.vlr.gg/series/86/valorant-champions-tour-2026
+https://www.vlr.gg/series/87/valorant-game-changers-2026
 ```
 
-Google Calendar decides when to refresh subscribed feeds, so changes may not appear instantly even after GitHub Pages is updated.
-
-## Configure calendars
-
-Edit `config/calendars.json`.
-
-Team calendar:
+Use the number after `/series/` as `series_id`.
 
 ```json
 {
-  "slug": "paper-rex",
-  "name": "Paper Rex VLR Matches",
-  "description": "All Paper Rex Valorant matches from VLR.gg.",
-  "type": "team",
-  "team_id": 624,
-  "team_aliases": ["Paper Rex", "PRX"],
+  "slug": "vct-2026",
+  "name": "Valorant Champions Tour 2026",
+  "description": "All VCT 2026 matches from VLR.gg.",
+  "type": "series",
+  "series_id": 86,
+  "series_slug": "valorant-champions-tour-2026",
   "enabled": true
 }
 ```
 
-Player calendar:
+For Game Changers:
 
 ```json
 {
-  "slug": "ayumiii",
-  "name": "Ayumiii VLR Matches",
-  "description": "All Ayumiii Valorant matches from VLR.gg.",
-  "type": "player",
-  "player_id": 8175,
+  "slug": "game-changers-2026",
+  "name": "Valorant Game Changers 2026",
+  "description": "All Game Changers 2026 matches from VLR.gg.",
+  "type": "series",
+  "series_id": 87,
+  "series_slug": "valorant-game-changers-2026",
   "enabled": true
 }
 ```
 
-## Find IDs
+The generator fetches the series page, extracts every `/event/<id>/...` link, then calls `vlr.events.matches(event_id=...)` for each event.
 
-```bash
-python -m pip install -r requirements.txt
-python scripts/find_ids.py "paper rex" --type team
-python scripts/find_ids.py "ayumiii" --type player
+## Single event calendars
+
+Use the event ID from a VLR event URL:
+
+```text
+https://www.vlr.gg/event/2775/vct-2026-pacific-stage-1
 ```
 
-You can also get IDs directly from VLR.gg URLs, for example `/team/624/paper-rex` or `/player/8175/...`.
+Config:
 
-## Local development
+```json
+{
+  "slug": "vct-2026-pacific-stage-1",
+  "name": "VCT 2026: Pacific Stage 1",
+  "description": "All matches from VCT 2026: Pacific Stage 1.",
+  "type": "event",
+  "event_id": 2775,
+  "enabled": true
+}
+```
+
+## Optional series filters
+
+You can filter which events from a series are used by event name substring.
+
+Only Pacific events:
+
+```json
+{
+  "slug": "vct-2026-pacific",
+  "name": "VCT 2026 Pacific",
+  "description": "Pacific VCT 2026 matches.",
+  "type": "series",
+  "series_id": 86,
+  "series_slug": "valorant-champions-tour-2026",
+  "event_name_include": ["Pacific"],
+  "enabled": true
+}
+```
+
+Exclude Kickoff:
+
+```json
+{
+  "slug": "vct-2026-no-kickoff",
+  "name": "VCT 2026 without Kickoff",
+  "description": "All VCT 2026 matches except Kickoff events.",
+  "type": "series",
+  "series_id": 86,
+  "series_slug": "valorant-champions-tour-2026",
+  "event_name_exclude": ["Kickoff"],
+  "enabled": true
+}
+```
+
+## Settings
+
+Important settings in `config/calendars.json`:
+
+- `published_ttl_hours`: hint for calendar clients, default `2`.
+- `event_match_limit`: maximum matches fetched per event.
+- `series_event_limit`: maximum events read from a series page.
+- `include_completed`: include completed matches.
+- `include_live`: include live matches.
+- `live_match_start_fallback`: use `now` for live matches that do not expose a start time.
+
+## Google Calendar cache note
+
+Google Calendar may cache subscribed `.ics` feeds. If you need to force a fresh subscription for your own calendar, add a cache buster when subscribing:
+
+```text
+https://<username>.github.io/<repo>/vct-2026.ics?v=2
+```
+
+## Local test
 
 ```bash
 python -m pip install -r requirements.txt
+python -m pytest -q
 python scripts/build_calendar.py
-python -m pytest
 ```
-
-## Notes
-
-- `slug` controls the public file name and URL.
-- Keep a slug stable after people subscribe.
-- The generator uses stable `UID`s based on VLR match IDs so updated titles replace old events when calendar clients refresh.
-- `vlrdevapi` is a community library, so occasional VLR markup changes may require parser updates.

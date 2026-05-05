@@ -13,11 +13,38 @@
     "live_match_start_fallback": "now",
     "completed_limit": 999,
     "include_completed": true,
+    "event_match_limit": 999,
+    "series_event_limit": 999,
     "request_timeout_seconds": 20,
     "allow_date_only": false,
     "published_ttl_hours": 2
   },
   "calendars": [
+    {
+      "slug": "vlr-gg",
+      "name": "Valorant Matches from VLR.gg",
+      "description": "All Valorant matches from VLR.gg.",
+      "type": "global",
+      "enabled": true
+    },
+    {
+      "slug": "vct-2026",
+      "name": "Valorant Champions Tour 2026",
+      "description": "All VCT 2026 matches from VLR.gg.",
+      "type": "series",
+      "series_id": 86,
+      "series_slug": "valorant-champions-tour-2026",
+      "enabled": true
+    },
+    {
+      "slug": "game-changers-2026",
+      "name": "Valorant Game Changers 2026",
+      "description": "All Game Changers 2026 matches from VLR.gg.",
+      "type": "series",
+      "series_id": 87,
+      "series_slug": "valorant-game-changers-2026",
+      "enabled": true
+    },
     {
       "slug": "paper-rex",
       "name": "Paper Rex VLR Matches",
