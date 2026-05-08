@@ -81,6 +81,13 @@ class NormalizedMatch:
         return f"{event} | {team1} vs {team2}"
 
 
+@dataclass(frozen=True)
+class DetectedTimezone:
+    tz: ZoneInfo | timezone
+    label: str
+    confidence: str
+
+
 def clean_text(value: Any, fallback: str = "") -> str:
     if value is None:
         return fallback
@@ -395,8 +402,9 @@ def fetch_text(url: str, timeout: Any = None) -> str:
     req = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "vlr-calendar-feed/1.0 (+https://github.com/RisPNG/vlr-calendar-feed)",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
         },
     )
     try:
@@ -679,6 +687,16 @@ def parse_match_datetime(raw: Any, tz: ZoneInfo, allow_date_only: bool = False) 
     return None
 
 
+def strip_timezone_suffix(value: str) -> str:
+    text = clean_text(value)
+    if not text:
+        return text
+
+    text = re.sub(r"\s+(?:UTC|GMT)?[+-]\d{1,2}(?::?\d{2})?\s*$", "", text, flags=re.I)
+    text = re.sub(r"\s+[A-Z]{2,5}\s*$", "", text)
+    return clean_text(text)
+
+
 def parse_time_value(value: Any) -> time | None:
     if isinstance(value, time):
         return value
@@ -686,6 +704,8 @@ def parse_time_value(value: Any) -> time | None:
     text = clean_text(value)
     if not text or text.lower() in {"tbd", "live", "completed", "ongoing"}:
         return None
+
+    text = strip_timezone_suffix(text)
 
     formats = ("%H:%M", "%I:%M %p", "%I%p", "%H%M")
     for fmt in formats:
@@ -716,9 +736,10 @@ def parse_datetime_string(value: str, tz: ZoneInfo) -> datetime | None:
         "%B %d %Y %I:%M %p",
     )
 
+    parse_text = strip_timezone_suffix(text)
     for fmt in formats:
         try:
-            return datetime.strptime(text, fmt).replace(tzinfo=tz)
+            return datetime.strptime(parse_text, fmt).replace(tzinfo=tz)
         except ValueError:
             continue
     return None
@@ -737,6 +758,209 @@ def make_vlr_url(raw: Any, match_id: str) -> str:
     if url.startswith("/"):
         return f"{VLR_BASE_URL}{url}"
     return f"{VLR_BASE_URL}/{match_id}"
+
+
+TIMEZONE_ABBR_TO_ZONE: dict[str, str] = {
+    "UTC": "UTC",
+    "GMT": "UTC",
+    "MYT": "Asia/Kuala_Lumpur",
+    "SGT": "Asia/Singapore",
+    "JST": "Asia/Tokyo",
+    "KST": "Asia/Seoul",
+    "EST": "America/New_York",
+    "EDT": "America/New_York",
+    "CST": "America/Chicago",
+    "CDT": "America/Chicago",
+    "MST": "America/Denver",
+    "MDT": "America/Denver",
+    "PST": "America/Los_Angeles",
+    "PDT": "America/Los_Angeles",
+    "AKST": "America/Anchorage",
+    "AKDT": "America/Anchorage",
+    "HST": "Pacific/Honolulu",
+    "BST": "Europe/London",
+    "GMT+1": "Europe/London",
+    "CET": "Europe/Paris",
+    "CEST": "Europe/Paris",
+    "EET": "Europe/Helsinki",
+    "EEST": "Europe/Helsinki",
+    "MSK": "Europe/Moscow",
+    "IST": "Asia/Kolkata",
+    "AWST": "Australia/Perth",
+    "ACST": "Australia/Adelaide",
+    "ACDT": "Australia/Adelaide",
+    "AEST": "Australia/Sydney",
+    "AEDT": "Australia/Sydney",
+    "NZST": "Pacific/Auckland",
+    "NZDT": "Pacific/Auckland",
+    "BRT": "America/Sao_Paulo",
+    "ART": "America/Argentina/Buenos_Aires",
+}
+
+TIMEZONE_ABBR_TO_OFFSET_MINUTES: dict[str, int] = {
+    "UTC": 0,
+    "GMT": 0,
+    "MYT": 8 * 60,
+    "SGT": 8 * 60,
+    "JST": 9 * 60,
+    "KST": 9 * 60,
+    "BRT": -3 * 60,
+    "ART": -3 * 60,
+}
+
+
+def timezone_from_text(value: Any) -> DetectedTimezone | None:
+    """Detect a timezone from visible VLR text such as '4:00 AM EDT'."""
+    text = clean_text(value)
+    if not text:
+        return None
+
+    # Examples: UTC+8, GMT-07:00, 4:00 PM +0200, 4:00 PM -07.
+    # Keep this tied to either an explicit UTC/GMT prefix or a clock value so
+    # random scores/stat modifiers elsewhere in the page are not misread.
+    numeric = re.search(
+        r"\b(?:UTC|GMT)\s*(?P<sign>[+-])(?P<hours>\d{1,2})(?::?(?P<minutes>\d{2}))?\b",
+        text,
+        re.I,
+    ) or re.search(
+        r"\b\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm)\s*(?P<sign>[+-])(?P<hours>\d{1,2})(?::?(?P<minutes>\d{2}))?\b",
+        text,
+    )
+    if numeric:
+        hours = int(numeric.group("hours"))
+        minutes = int(numeric.group("minutes") or 0)
+        if hours <= 14 and minutes < 60:
+            sign = 1 if numeric.group("sign") == "+" else -1
+            offset_minutes = sign * (hours * 60 + minutes)
+            label = f"UTC{numeric.group('sign')}{hours:02d}:{minutes:02d}"
+            return DetectedTimezone(
+                timezone(timedelta(minutes=offset_minutes), label),
+                label,
+                "explicit numeric offset",
+            )
+
+    # Prefer a timezone token that appears near a clock value.
+    clock_with_zone = re.search(
+        r"\b\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm)\s*(?P<abbr>[A-Z]{2,5})\b",
+        text,
+    )
+    if clock_with_zone:
+        return timezone_from_abbreviation(clock_with_zone.group("abbr"))
+
+    # Fallback: use the final all-caps token if it is a known timezone.
+    for token in reversed(re.findall(r"\b[A-Z]{2,5}\b", text)):
+        detected = timezone_from_abbreviation(token)
+        if detected is not None:
+            return detected
+
+    return None
+
+
+def timezone_from_abbreviation(abbr: str) -> DetectedTimezone | None:
+    key = clean_text(abbr).upper()
+    if not key:
+        return None
+
+    zone_name = TIMEZONE_ABBR_TO_ZONE.get(key)
+    if zone_name:
+        return DetectedTimezone(ZoneInfo(zone_name), f"{zone_name} ({key})", "visible timezone abbreviation")
+
+    if key in TIMEZONE_ABBR_TO_OFFSET_MINUTES:
+        offset_minutes = TIMEZONE_ABBR_TO_OFFSET_MINUTES[key]
+        sign = "+" if offset_minutes >= 0 else "-"
+        absolute = abs(offset_minutes)
+        label = f"UTC{sign}{absolute // 60:02d}:{absolute % 60:02d} ({key})"
+        return DetectedTimezone(
+            timezone(timedelta(minutes=offset_minutes), label),
+            label,
+            "visible timezone abbreviation",
+        )
+
+    return None
+
+
+def detect_timezone_from_match_detail_html(page_html: str) -> DetectedTimezone | None:
+    """Extract the timezone that VLR rendered on a match detail page."""
+    candidates: list[str] = []
+
+    # Look specifically at VLR's time conversion elements first.
+    for found in re.finditer(r"<[^>]*class=[\"'][^\"']*moment-tz-convert[^\"']*[\"'][^>]*>(?P<body>.*?)</[^>]+>", page_html, re.I | re.S):
+        candidates.append(clean_html_text(found.group("body")))
+
+    # Fallback to the whole page text. This catches markup variations where the
+    # timezone appears outside the moment-tz-convert span/div.
+    candidates.append(clean_html_text(page_html))
+
+    for candidate in candidates:
+        detected = timezone_from_text(candidate)
+        if detected is not None:
+            return detected
+
+    return None
+
+
+def detect_source_timezone(
+    raw_matches: Iterable[Any],
+    settings: dict[str, Any],
+    fallback_tz: ZoneInfo,
+) -> DetectedTimezone:
+    """Infer VLR's source timezone for this build from the rendered VLR output.
+
+    VLR match-list times are timezone-less wall-clock strings and can vary by
+    runner/IP/session. We therefore detect the timezone VLR rendered during this
+    run from explicit timezone text in raw match data or match detail HTML.
+    """
+    if not bool(settings.get("detect_source_timezone", True)):
+        return DetectedTimezone(fallback_tz, str(fallback_tz), "calendar timezone fallback")
+
+    matches = list(raw_matches)
+
+    # Some API responses may include a timezone suffix directly, for example
+    # '4:00 AM EDT'. Prefer that because it comes from the same list response.
+    for raw in matches:
+        for attr in ("time", "time_text", "datetime", "start_time", "starts_at"):
+            detected = timezone_from_text(get_attr(raw, attr, default=""))
+            if detected is not None:
+                return detected
+
+    sample_size = int(settings.get("timezone_detection_sample_size", 20))
+    cache: dict[str, str] = {}
+    checked = 0
+    for raw in matches:
+        if checked >= sample_size:
+            break
+
+        match_id = match_id_from_raw(raw)
+        if not match_id:
+            continue
+
+        checked += 1
+        try:
+            page_html = fetch_match_page_html(raw, match_id, settings, cache)
+        except Exception as exc:
+            print(f"  Could not inspect timezone for match {match_id}: {exc}", file=sys.stderr)
+            continue
+
+        detected = detect_timezone_from_match_detail_html(page_html)
+        if detected is not None:
+            return detected
+
+    print(
+        f"  Could not detect VLR source timezone from {checked} sampled match detail page(s); "
+        f"falling back to calendar timezone {fallback_tz}.",
+        file=sys.stderr,
+    )
+    return DetectedTimezone(fallback_tz, str(fallback_tz), "calendar timezone fallback")
+
+
+def fetch_match_page_html(raw: Any, match_id: str, settings: dict[str, Any], cache: dict[str, str]) -> str:
+    if match_id in cache:
+        return cache[match_id]
+
+    url = make_vlr_url(raw, match_id)
+    html_text = fetch_text(url, timeout=settings.get("request_timeout_seconds"))
+    cache[match_id] = html_text
+    return html_text
 
 
 def filter_normalized_matches(matches: Iterable[NormalizedMatch], settings: dict[str, Any]) -> list[NormalizedMatch]:
@@ -1046,11 +1270,11 @@ def write_nojekyll() -> None:
 def build() -> int:
     config = load_config()
     settings = config.get("settings", {}) if isinstance(config.get("settings"), dict) else {}
-    tz = ZoneInfo(clean_text(settings.get("timezone"), "UTC"))
+    calendar_tz = ZoneInfo(clean_text(settings.get("timezone"), "UTC"))
     allow_date_only = bool(settings.get("allow_date_only", False))
 
     live_start_fallback = clean_text(settings.get("live_match_start_fallback"), "now").lower()
-    fallback_live_start = datetime.now(tz) if live_start_fallback == "now" else None
+    fallback_live_start = datetime.now(calendar_tz) if live_start_fallback == "now" else None
 
     sources = [source for source in load_sources(config) if source.enabled]
     PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
@@ -1059,13 +1283,15 @@ def build() -> int:
     for source in sources:
         print(f"Building {source.slug} ({source.source_type})...")
         raw_matches = fetch_matches_for_source(source, settings)
+        detected_tz = detect_source_timezone(raw_matches, settings, fallback_tz=calendar_tz)
+        print(f"  Using VLR source timezone: {detected_tz.label} ({detected_tz.confidence}).")
         normalized = [
             match
             for raw in raw_matches
             if (
                 match := normalize_match(
                     raw,
-                    tz=tz,
+                    tz=detected_tz.tz,
                     allow_date_only=allow_date_only,
                     fallback_live_start=fallback_live_start,
                 )

@@ -6,6 +6,8 @@
   },
   "settings": {
     "timezone": "Asia/Kuala_Lumpur",
+    "detect_source_timezone": true,
+    "timezone_detection_sample_size": 20,
     "default_match_duration_minutes": 120,
     "upcoming_limit": 25565,
     "include_live": true,

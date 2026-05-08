@@ -195,3 +195,59 @@ def test_ical_uses_match_specific_duration_with_default_fallback():
     assert "DTEND:20260504T130000Z" in ics
     assert "UID:vlr-match-fallback@vlr-calendar-feed" in ics
     assert "DTEND:20260504T140000Z" in ics
+
+
+def test_detect_timezone_from_visible_edT_time():
+    detected = build.timezone_from_text("Friday, May 8 4:00 AM EDT")
+
+    assert detected is not None
+    assert detected.label == "America/New_York (EDT)"
+
+    start = datetime.combine(date(2026, 5, 8), build.parse_time_value("4:00 AM"), tzinfo=detected.tz)
+    assert start.astimezone(timezone.utc) == datetime(2026, 5, 8, 8, 0, tzinfo=timezone.utc)
+
+
+def test_detect_timezone_from_visible_pdt_time():
+    detected = build.timezone_from_text("Friday, May 8 1:00 AM PDT")
+
+    assert detected is not None
+    assert detected.label == "America/Los_Angeles (PDT)"
+
+    start = datetime.combine(date(2026, 5, 8), build.parse_time_value("1:00 AM"), tzinfo=detected.tz)
+    assert start.astimezone(timezone.utc) == datetime(2026, 5, 8, 8, 0, tzinfo=timezone.utc)
+
+
+def test_detect_timezone_from_match_detail_html():
+    html = """
+    <div class="match-header-date">
+      <div class="moment-tz-convert">Fri, May 8</div>
+      <div class="moment-tz-convert">1:00 AM PDT</div>
+    </div>
+    """
+
+    detected = build.detect_timezone_from_match_detail_html(html)
+
+    assert detected is not None
+    assert detected.label == "America/Los_Angeles (PDT)"
+
+
+def test_detect_source_timezone_from_raw_match_time_without_network():
+    raw = RawMatch(
+        match_id=666490,
+        player_team=Team(name="Paper Rex", tag="PRX"),
+        opponent_team=Team(name="Global Esports", tag="GE"),
+        event="VCT 26: PAC Stage 1",
+        date=date(2026, 5, 8),
+        time="1:00 AM PDT",
+        status="upcoming",
+    )
+
+    detected = build.detect_source_timezone(
+        [raw],
+        {"detect_source_timezone": True},
+        fallback_tz=ZoneInfo("Asia/Kuala_Lumpur"),
+    )
+    match = build.normalize_match(raw, tz=detected.tz)
+
+    assert match is not None
+    assert match.starts_at.astimezone(timezone.utc) == datetime(2026, 5, 8, 8, 0, tzinfo=timezone.utc)

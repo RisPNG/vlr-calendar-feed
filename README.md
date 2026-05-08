@@ -125,6 +125,9 @@ Exclude Kickoff:
 Important settings in `config/calendars.json`:
 
 - `published_ttl_hours`: hint for calendar clients, default `2`.
+- `timezone`: the calendar/display timezone, for example `Asia/Kuala_Lumpur`.
+- `detect_source_timezone`: when `true`, infer the timezone VLR rendered during the current build from VLR's visible timezone text, so GitHub runner region changes do not shift match times.
+- `timezone_detection_sample_size`: maximum number of match detail pages to inspect while detecting VLR's source timezone.
 - `event_match_limit`: maximum matches fetched per event.
 - `series_event_limit`: maximum events read from a series page.
 - `include_completed`: include completed matches.
