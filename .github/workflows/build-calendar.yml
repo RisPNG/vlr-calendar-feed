@@ -27,6 +27,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      changed: ${{ steps.calendars.outputs.changed }}
 
     steps:
       - name: Check out repository
@@ -44,19 +47,68 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
+      - name: Restore polling state
+        uses: actions/cache@v4
+        with:
+          path: .calendar-state
+          key: calendar-state-v1-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: calendar-state-v1-${{ github.ref_name }}-
+
+      - name: Restore published calendars
+        env:
+          PREVIOUS_DIR: ${{ runner.temp }}/previous
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from urllib.error import HTTPError
+          from urllib.request import Request, urlopen
+
+          config = json.loads(Path("config/calendars.json").read_text())
+          base_url = config["site"]["base_url"].rstrip("/")
+          previous = Path(os.environ["PREVIOUS_DIR"])
+          previous.mkdir(parents=True, exist_ok=True)
+          headers = {"User-Agent": "vlr-calendar-feed"}
+          try:
+              with urlopen(Request(f"{base_url}/feeds.json", headers=headers), timeout=120) as response:
+                  manifest = response.read()
+          except HTTPError as exc:
+              if exc.code != 404:
+                  raise
+              print("No published manifest found; building the initial calendars.")
+          else:
+              feeds = json.loads(manifest)
+              (previous / "feeds.json").write_bytes(manifest)
+              filenames = {"index.html", *(feed["file"] for feed in feeds)}
+              for filename in sorted(filenames):
+                  if Path(filename).name != filename:
+                      raise ValueError(f"Invalid published filename: {filename}")
+                  with urlopen(Request(f"{base_url}/{filename}", headers=headers), timeout=120) as response:
+                      (previous / filename).write_bytes(response.read())
+              (previous / ".nojekyll").touch()
+              print(f"Restored {len(feeds)} published calendars.")
+          PY
+
       - name: Build calendars
-        run: python scripts/build_calendar.py
+        id: calendars
+        env:
+          VLR_API_KEY: ${{ secrets.VLR_API_KEY }}
+        run: python scripts/build_calendar.py --previous-dir "$RUNNER_TEMP/previous" --state-file .calendar-state/state.json --output-dir public
 
       - name: Configure Pages
+        if: steps.calendars.outputs.changed == 'true'
         uses: actions/configure-pages@v5
 
       - name: Upload Pages artifact
+        if: steps.calendars.outputs.changed == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: public
 
   deploy:
     needs: build
+    if: needs.build.outputs.changed == 'true'
     runs-on: ubuntu-latest
 
     environment:

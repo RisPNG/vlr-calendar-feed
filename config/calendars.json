@@ -2,27 +2,29 @@
   "site": {
     "title": "VLR Calendar Feeds",
     "description": "Public Valorant match calendars generated from VLR.gg.",
-    "base_url": ""
+    "base_url": "https://rispng.github.io/vlr-calendar-feed"
   },
   "settings": {
+    "api_base_url": "https://vlrggapi.rispeng.com",
     "timezone": "Asia/Kuala_Lumpur",
-    "detect_source_timezone": true,
-    "timezone_detection_sample_size": 20,
     "default_match_duration_minutes": 120,
     "upcoming_limit": 25565,
     "include_live": true,
     "live_limit": 25565,
-    "live_match_start_fallback": "now",
     "completed_limit": 25565,
     "include_completed": true,
     "event_match_limit": 25565,
     "series_event_limit": 25565,
-    "request_timeout_seconds": 60,
+    "request_timeout_seconds": 120,
+    "request_interval_seconds": 1,
+    "recent_history_days": 7,
+    "detail_refresh_per_run": 24,
+    "historical_event_checks_per_run": 5,
+    "history_pages_per_run": 1,
+    "history_max_pages": 50,
     "allow_date_only": false,
     "published_ttl_hours": 2,
     "infer_match_duration_from_best_of": true,
-    "fetch_best_of_from_match_detail": true,
-    "best_of_detail_fetch_max_matches": 25565,
     "best_of_duration_minutes": {
       "1": 60,
       "3": 120,
@@ -43,7 +45,6 @@
       "description": "All VCT 2026 matches from VLR.gg.",
       "type": "series",
       "series_id": 86,
-      "series_slug": "valorant-champions-tour-2026",
       "enabled": true
     },
     {
@@ -52,7 +53,6 @@
       "description": "All Game Changers 2026 matches from VLR.gg.",
       "type": "series",
       "series_id": 87,
-      "series_slug": "valorant-game-changers-2026",
       "enabled": true
     },
     {
@@ -61,10 +61,6 @@
       "description": "All Paper Rex Valorant matches from VLR.gg.",
       "type": "team",
       "team_id": 624,
-      "team_aliases": [
-        "Paper Rex",
-        "PRX"
-      ],
       "enabled": true
     },
     {
