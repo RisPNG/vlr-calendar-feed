@@ -5,5 +5,4 @@ __pycache__/
 .venv/
 venv/
 .DS_Store
-public/*.ics
-public/feeds.json
+public/

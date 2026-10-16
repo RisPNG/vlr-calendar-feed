@@ -309,7 +309,7 @@ def test_all_source_types_share_requests_and_publish_canonical_matches(
 
 
 def test_unchanged_runs_preserve_publication_and_event_versions(
-    workspace, api_responses, monkeypatch, tmp_path
+    workspace, api_responses, capsys, tmp_path
 ):
     config, paths = workspace
     responses, _ = api_responses
@@ -323,8 +323,6 @@ def test_unchanged_runs_preserve_publication_and_event_versions(
             ("/api/v1/matches/100", ()): match_detail(100),
         }
     )
-    output = tmp_path / "github-output"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
     assert build.build(**paths, now=NOW) == 0
     published = {
         path.name: (path.read_bytes(), path.stat().st_mtime_ns)
@@ -341,7 +339,7 @@ def test_unchanged_runs_preserve_publication_and_event_versions(
     after = calendar_events(paths["output_dir"] / "all.ics")["100"]
     assert after.decoded("DTSTAMP") == before.decoded("DTSTAMP")
     assert int(after["SEQUENCE"]) == int(before["SEQUENCE"])
-    assert output.read_text().splitlines()[-1] == "changed=false"
+    assert capsys.readouterr().out.rstrip().endswith("Publication changed: false")
 
 
 def test_existing_match_corrections_update_only_the_changed_event(
@@ -635,7 +633,7 @@ def test_history_pages_are_revisited_with_a_bounded_rotation(workspace, api_resp
     "retain_state", [True, False], ids=["cached-state", "cache-evicted"]
 )
 def test_clean_output_can_reuse_previous_publication(
-    workspace, api_responses, monkeypatch, tmp_path, retain_state
+    workspace, api_responses, capsys, tmp_path, retain_state
 ):
     config, paths = workspace
     responses, _ = api_responses
@@ -671,8 +669,6 @@ def test_clean_output_can_reuse_previous_publication(
         paths["state_file"].unlink()
         config["settings"]["history_pages_per_run"] = 0
         paths["config_path"].write_text(json.dumps(config))
-    output = tmp_path / "github-output"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
 
     assert (
         build.build(**paths, previous_dir=previous, now=NOW + timedelta(hours=2)) == 0
@@ -682,7 +678,7 @@ def test_clean_output_can_reuse_previous_publication(
         path.name: path.read_bytes() for path in paths["output_dir"].iterdir()
     } == published
     assert {path.name: path.read_bytes() for path in previous.iterdir()} == published
-    assert output.read_text().splitlines()[-1] == "changed=false"
+    assert capsys.readouterr().out.rstrip().endswith("Publication changed: false")
 
 
 def test_historical_score_correction_advances_event_version(workspace, api_responses):
@@ -878,7 +874,7 @@ def test_shared_detail_cache_does_not_hide_one_sources_rescheduled_start(
 
 
 def test_failed_publication_retry_reuses_the_generated_event_version(
-    workspace, api_responses, monkeypatch, tmp_path
+    workspace, api_responses, capsys, tmp_path
 ):
     config, paths = workspace
     responses, _ = api_responses
@@ -903,8 +899,6 @@ def test_failed_publication_retry_reuses_the_generated_event_version(
     candidate = (paths["output_dir"] / "all.ics").read_bytes()
     assert candidate != published
     paths["output_dir"] = tmp_path / "retry-publication"
-    output = tmp_path / "github-output"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
 
     assert (
         build.build(**paths, previous_dir=previous, now=NOW + timedelta(hours=4)) == 0
@@ -912,7 +906,7 @@ def test_failed_publication_retry_reuses_the_generated_event_version(
 
     assert (paths["output_dir"] / "all.ics").read_bytes() == candidate
     assert (previous / "all.ics").read_bytes() == published
-    assert output.read_text().splitlines()[-1] == "changed=true"
+    assert capsys.readouterr().out.rstrip().endswith("Publication changed: true")
 
 
 def test_detail_budget_reserves_capacity_for_current_matches_with_large_history(
@@ -1108,7 +1102,7 @@ def test_flattened_published_descriptions_retain_completed_history_on_cache_loss
 
 
 def test_newer_published_revision_takes_precedence_over_restored_stale_state(
-    workspace, api_responses, monkeypatch, tmp_path
+    workspace, api_responses, capsys, tmp_path
 ):
     config, paths = workspace
     responses, _ = api_responses
@@ -1140,8 +1134,6 @@ def test_newer_published_revision_takes_precedence_over_restored_stale_state(
     assert latest.decoded("DTSTAMP") == NOW + timedelta(hours=4)
     paths["state_file"].write_bytes(stale_state)
     paths["output_dir"] = tmp_path / "restored-cache-run"
-    output = tmp_path / "github-output"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
 
     assert (
         build.build(**paths, previous_dir=previous, now=NOW + timedelta(hours=6)) == 0
@@ -1154,4 +1146,4 @@ def test_newer_published_revision_takes_precedence_over_restored_stale_state(
         calendar_events(paths["output_dir"] / "all.ics")["100"].to_ical()
         == latest.to_ical()
     )
-    assert output.read_text().splitlines()[-1] == "changed=false"
+    assert capsys.readouterr().out.rstrip().endswith("Publication changed: false")

@@ -2,10 +2,13 @@
   "site": {
     "title": "VLR Calendar Feeds",
     "description": "Public Valorant match calendars generated from VLR.gg.",
-    "base_url": "https://rispng.github.io/vlr-calendar-feed"
+    "base_url": ""
   },
   "settings": {
     "api_base_url": "https://vlrggapi.rispeng.com",
+    "poll_interval_seconds": 7200,
+    "retry_interval_seconds": 300,
+    "build_timeout_seconds": 1800,
     "timezone": "Asia/Kuala_Lumpur",
     "default_match_duration_minutes": 120,
     "upcoming_limit": 25565,

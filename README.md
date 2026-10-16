@@ -1,8 +1,6 @@
 # VLR Calendar Feed
 
-Generate public `.ics` feeds from VLR.gg through [vlrggapi.rispeng.com](https://vlrggapi.rispeng.com) and publish them with GitHub Pages.
-
-Very wonky [video tutorial](https://f005.backblazeb2.com/file/RisPNG/vlr-calendar-feed-tut.mp4).
+Serve public `.ics` subscriptions from VLR.gg through [vlrggapi.rispeng.com](https://vlrggapi.rispeng.com). A FastAPI service polls the API in the background and serves its last successful calendar snapshot from its own persistent storage.
 
 The repository supports these calendar sources:
 
@@ -12,27 +10,45 @@ The repository supports these calendar sources:
 - `series`: matches from events linked from a VLR series page, such as VCT 2026 or Game Changers 2026.
 - `global`: global upcoming, live, and completed match listings.
 
-## Subscribe or deploy
+## Run on Render
 
-The published feeds are available at [rispng.github.io/vlr-calendar-feed](https://rispng.github.io/vlr-calendar-feed/). Copy a subscription URL into Google Calendar using **Other calendars → + → From URL**. For example:
+Create a separate Python web service from this repository, or review and apply `render.yaml` as a Render Blueprint. The supplied configuration uses one always-on instance and a 1 GB persistent disk so polling continues between subscription requests and historical state survives restarts.
+
+| Setting | Value |
+| --- | --- |
+| Branch | `master` |
+| Runtime | Python |
+| Python version | `PYTHON_VERSION=3.14.7` |
+| Compute plan | `0.5c-512mb` |
+| Instances | `1` |
+| Build command | `python -m pip install -r requirements.txt` |
+| Start command | `python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1` |
+| Health check | `/health` |
+| Auto-deploy | On commit |
+| Persistent disk | 1 GB mounted at `/var/data` |
+| Data directory | `CALENDAR_DATA_DIR=/var/data` |
+
+Keep one instance and one Uvicorn worker because the application owns its background poller and local state. Generated feeds and polling state live under `CALENDAR_DATA_DIR`. Without an explicit value, local runs use `.calendar-state/service` inside the repository. No PostgreSQL, Redis, or separate worker service is required.
+
+Render supplies `RENDER_EXTERNAL_URL`, which the application uses for complete subscription URLs. For a custom domain, configure it in Render and set `CALENDAR_BASE_URL` to its HTTPS origin. This override takes precedence over the Render address.
+
+No API key is required for the configured public API. If you use an authenticated API, set the optional `VLR_API_KEY` environment variable in Render. The client sends it as a bearer token. `VLR_API_BASE_URL` can override the configured API address.
+
+The first calendar build runs after startup. `/health` returns process liveness, snapshot readiness, and the last successful refresh. The calendar index returns `503` until the first successful snapshot is available. After that, the index, `/feeds.json`, and each `/<slug>.ics` URL serve the most recent successful snapshot while later builds run or fail.
+
+Persistent disks are available only on paid Render services, and only files under the mount path survive restarts. Render also stops the existing disk-backed instance before starting its replacement during a deploy. See [Render's persistent disk documentation](https://render.com/docs/disks) for these hosting constraints.
+
+## Subscribe
+
+Open the calendar service's root URL and copy a subscription URL into Google Calendar using **Other calendars → + → From URL**. For example:
 
 ```text
-https://rispng.github.io/vlr-calendar-feed/paper-rex.ics
+https://<calendar-service>.onrender.com/paper-rex.ics
 ```
-
-To publish your own feeds:
-
-1. Push this repository to GitHub.
-2. Open **Settings → Pages** and set **Source** to **GitHub Actions**.
-3. Edit `config/calendars.json`, including `site.base_url` for your Pages address and `settings.api_base_url` for the API you use.
-4. Run **Actions → Build and deploy calendar feeds → Run workflow**. Re-enable the workflow if GitHub has disabled it after repository inactivity.
-5. Subscribe to the generated `.ics` URL.
-
-No API key or repository secret is required for the configured public API. If you use an authenticated API, set the optional `VLR_API_KEY` repository secret for GitHub Actions, or the environment variable of the same name for local commands. The client sends it as a bearer token. `VLR_API_BASE_URL` can override the configured API address locally.
 
 ## Refresh and publication
 
-The workflow polls every two hours at minute 17 UTC. GitHub may delay scheduled runs, and calendar applications refresh subscriptions on their own schedules. `published_ttl_hours` is a refresh hint for those applications.
+The service starts a poll on startup and refreshes every two hours while it is running. A failed refresh is retried after five minutes, with the previous successful snapshot still available. Calendar applications refresh subscriptions on their own schedules. `published_ttl_hours` is a refresh hint for those applications.
 
 Each run fetches current listings for the configured sources and shares API responses across calendars. Recent history is checked more frequently. Older history pages, event listings, and match details are rechecked in rotating batches, including completed matches. An unchanged listing does not prevent a later detail refresh, and records are not permanently excluded because they are old.
 
@@ -40,11 +56,11 @@ Every previously unseen event listing is fetched when discovered, including duri
 
 The configured `detail_refresh_per_run` budget is `24`. Half is reserved for older completed matches, so at least `12` older details can be revisited per successful run while recent details use the remaining slots. Unused recent slots can also refresh older details. For a stable cohort of `N` older matches, one detail sweep takes roughly `2 × ceil(N / 12)` hours at the scheduled cadence. For example, 1,200 older matches can take about 200 hours, or eight days and eight hours. Failed or delayed runs and newly discovered records can extend that time. A detail-only correction is therefore not guaranteed to appear within two hours. Increasing the batch sizes reduces the delay and increases API and VLR requests.
 
-The generator compares the resulting calendars and index with the published site. It preserves event UIDs, timestamps, and revision numbers when event content is unchanged, and publishes only when the feed or index content changes. A correction to an existing match updates that event. Matches without a known start time are omitted until a usable time is available.
+The generator compares the resulting calendars and index with the current local snapshot. It preserves event UIDs, timestamps, and revision numbers when event content is unchanged, and replaces the public snapshot only when the feed or index content changes. A correction to an existing match updates that event. Matches without a known start time are omitted until a usable time is available.
 
-Polling state is stored separately in the GitHub Actions cache, including after runs that publish nothing. The previous published site remains the comparison baseline, so a failed deployment can be retried. Event revisions are reconciled with both the published feed and the cached candidate, preserving the newer revision after a failed deployment or a lost cache save. If the cache is missing, completed entries are recovered from the published feeds while history pages are rediscovered. Those recovered records remain eligible for detail revalidation. If the API or baseline download fails, the workflow fails and the existing site remains published.
+Polling state is stored separately from public files under the data directory and is updated even when the snapshot does not change. If state is missing but a snapshot remains, completed entries are recovered from those feeds while history pages are rediscovered. Those recovered records remain eligible for detail revalidation. The service switches snapshots after a successful build and retains the current and previous generations. An API or build failure leaves the last successful snapshot available.
 
-A completed entry missing from a partial history window is retained. It can be removed after a complete sweep reaches the source's actual end and confirms its absence with a check at least as recent as the stored event revision. Reaching the configured pagination cap alone does not confirm absence. Corrected match details can also remove an entry from a team calendar when neither team matches the configured team. The build job has a 30-minute timeout, and a failed or timed-out build leaves the published site intact.
+A completed entry missing from a partial history window is retained. It can be removed after a complete sweep reaches the source's actual end and confirms its absence with a check at least as recent as the stored event revision. Reaching the configured pagination cap alone does not confirm absence. Corrected match details can also remove an entry from a team calendar when neither team matches the configured team.
 
 ## Calendar configuration
 
@@ -90,6 +106,9 @@ For a single [VCT 2026 Pacific Stage 1 event](https://www.vlr.gg/event/2775/vct-
 | Setting | Purpose |
 | --- | --- |
 | `api_base_url` | API origin, currently `https://vlrggapi.rispeng.com`. |
+| `poll_interval_seconds` | Time between successful poll starts, currently `7200` seconds. |
+| `retry_interval_seconds` | Wait after a failed build before retrying, currently `300` seconds. |
+| `build_timeout_seconds` | Maximum build runtime, currently `1800` seconds. A timed-out build leaves the current snapshot available. |
 | `timezone` | Calendar display timezone, currently `Asia/Kuala_Lumpur`. API timestamps identify the actual instant independently of this setting. |
 | `request_timeout_seconds` | Per-request timeout. The configured `120` seconds allows for an API cold start. |
 | `request_interval_seconds` | Minimum spacing between requests. The configured one-second interval is a courtesy setting, not a verified VLR quota. |
@@ -102,7 +121,7 @@ For a single [VCT 2026 Pacific Stage 1 event](https://www.vlr.gg/event/2775/vct-
 | `event_match_limit`, `series_event_limit` | Maximum matches per event and events per series. |
 | `include_completed`, `include_live` | Include completed and live matches. Both are enabled in the supplied configuration. |
 | `allow_date_only` | Allow a date without a known time to become a midnight event. Disabled by default. |
-| `published_ttl_hours` | Suggested subscription refresh interval, currently `2` hours. The workflow schedule is configured separately. |
+| `published_ttl_hours` | Suggested subscription refresh interval, currently `2` hours. The service's polling interval is configured separately. |
 | `default_match_duration_minutes` | Fallback event duration, currently `120` minutes. |
 | `infer_match_duration_from_best_of` | Use a known match format to estimate duration. |
 | `best_of_duration_minutes` | Format-to-duration mapping, currently BO1 = 60, BO3 = 120, and BO5 = 180 minutes. |
@@ -111,22 +130,23 @@ Durations are estimates because scheduled match listings do not provide an end t
 
 ## Local use
 
-Use Python 3.11 or later. HTTP requests use the Python standard library, and `icalendar` reads and serialises calendar feeds. The requirements file also installs pytest for the tests.
+Use Python 3.14.7, as pinned in `.python-version`. FastAPI and Uvicorn run the service, HTTP requests use the Python standard library, and `icalendar` reads and serialises calendar feeds. Development dependencies are separate from the production installation.
 
 ```bash
-mise exec -- python -m pip install -r requirements.txt
-mise exec -- python -m pytest -q
-mise exec -- python scripts/build_calendar.py --state-file .calendar-state/state.json --output-dir public
+mise exec -- python -m venv .venv
+mise exec -- .venv/bin/python -m pip install -r requirements-dev.txt
+mise exec -- .venv/bin/python -m pytest -q
+mise exec -- .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 ```
 
-To compare with an existing site snapshot, pass `--previous-dir /path/to/previous`. Keep the state file between runs to continue historical revalidation. The workflow restores the published site automatically.
+The index is available at `http://127.0.0.1:8000/` after the first successful build. Keep the data directory between runs to continue historical revalidation and preserve event revisions. For a one-off build, run `scripts/build_calendar.py` with explicit `--output-dir`, `--state-file`, and optional `--previous-dir` paths.
 
 ## Subscription caching
 
 Google Calendar may continue showing a cached subscription after the site updates. To create a new subscription URL, add a query parameter:
 
 ```text
-https://rispng.github.io/vlr-calendar-feed/vct-2026.ics?v=2
+https://<calendar-service>.onrender.com/vct-2026.ics?v=2
 ```
 
 This creates a different subscription URL. It does not control Google's refresh schedule.
