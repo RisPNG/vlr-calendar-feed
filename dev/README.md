@@ -28,6 +28,8 @@ Create a Python web service from this repository, or review and apply [render.ya
 
 | Setting | Value |
 | --- | --- |
+| Service name | `vlr-gg-ics` |
+| Region | Singapore |
 | Branch | `master` |
 | Runtime | Python |
 | Python version | `PYTHON_VERSION=3.14.7` |
