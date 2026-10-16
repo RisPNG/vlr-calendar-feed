@@ -19,8 +19,6 @@ def backend(monkeypatch):
     for variable in (
         "VLR_API_BASE_URL",
         "VLR_API_KEY",
-        "CALENDAR_BASE_URL",
-        "RENDER_EXTERNAL_URL",
     ):
         monkeypatch.delenv(variable, raising=False)
     state = SimpleNamespace(
@@ -120,7 +118,6 @@ def service_config(tmp_path, backend):
         "site": {
             "title": "Calendar Service",
             "description": "Match subscriptions",
-            "base_url": "",
         },
         "settings": {
             "api_base_url": backend.url,
@@ -156,13 +153,13 @@ def wait_for_health(client, predicate):
     )
 
 
-@pytest.mark.parametrize("custom_domain", [False, True])
+@pytest.mark.parametrize(
+    "page_origin",
+    ["https://vlrggics.rispeng.com", "https://vlr-calendar-feed.onrender.com"],
+)
 def test_initial_background_build_keeps_health_responsive_and_serves_real_feeds(
-    service_config, backend, tmp_path, monkeypatch, custom_domain
+    service_config, backend, tmp_path, page_origin
 ):
-    monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://calendar-test.onrender.com")
-    if custom_domain:
-        monkeypatch.setenv("CALENDAR_BASE_URL", "https://calendar.example.test")
     backend.block_next = True
     app = create_app(
         service_config,
@@ -171,7 +168,7 @@ def test_initial_background_build_keeps_health_responsive_and_serves_real_feeds(
         retry_interval_seconds=60,
     )
 
-    with TestClient(app) as client:
+    with TestClient(app, base_url=page_origin) as client:
         assert backend.blocked.wait(5)
         assert client.get("/health").json() == {
             "status": "starting",
@@ -197,12 +194,9 @@ def test_initial_background_build_keeps_health_responsive_and_serves_real_feeds(
         assert "Paper Rex" in str(event["SUMMARY"])
         assert client.get("/").status_code == 200
         assert "All Matches" in client.get("/").text
-        origin = (
-            "https://calendar.example.test"
-            if custom_domain
-            else "https://calendar-test.onrender.com"
-        )
-        assert f'data-url="{origin}/all.ics"' in client.get("/").text
+        assert 'data-feed="all.ics"' in client.get("/").text
+        assert "<code>all.ics</code>" in client.get("/").text
+        assert "data-url=" not in client.get("/").text
         assert client.get("/state.json").status_code == 404
         manifest = client.get("/feeds.json")
         assert manifest.status_code == 200

@@ -738,17 +738,10 @@ def build(
         print(f"Built {filename}: {len(matches)} matches", flush=True)
     state["feeds"] = {source.slug: versions[source.slug] for source in sources}
     site = config.get("site", {})
-    base_url = (
-        os.environ.get("CALENDAR_BASE_URL")
-        or os.environ.get("RENDER_EXTERNAL_URL")
-        or site.get("base_url")
-        or "http://localhost:8000"
-    ).rstrip("/")
     cards = []
     for feed in manifest:
-        url = f"{base_url}/{feed['file']}"
         cards.append(
-            f'<article class="card"><h2>{html.escape(feed["name"])}</h2><p>{html.escape(feed["description"])}</p><p><strong>{feed["match_count"]}</strong> events generated.</p><div class="actions"><a href="{feed["file"]}">Download ICS</a><button data-url="{html.escape(url, quote=True)}">Copy subscription URL</button></div><code>{html.escape(url)}</code></article>'
+            f'<article class="card"><h2>{html.escape(feed["name"])}</h2><p>{html.escape(feed["description"])}</p><p><strong>{feed["match_count"]}</strong> events generated.</p><div class="actions"><a href="{feed["file"]}">Download ICS</a><button data-feed="{feed["file"]}">Copy subscription URL</button></div><code>{feed["file"]}</code></article>'
         )
     template = Template(
         (ROOT_DIR / "scripts" / "index.html").read_text(encoding="utf-8")

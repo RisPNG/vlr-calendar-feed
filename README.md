@@ -30,7 +30,7 @@ Create a separate Python web service from this repository, or review and apply `
 
 Keep one instance and one Uvicorn worker because the application owns its background poller and local state. Generated feeds and polling state live under `CALENDAR_DATA_DIR`. Without an explicit value, local runs use `.calendar-state/service` inside the repository. No PostgreSQL, Redis, or separate worker service is required.
 
-Render supplies `RENDER_EXTERNAL_URL`, which the application uses for complete subscription URLs. For a custom domain, configure it in Render and set `CALENDAR_BASE_URL` to its HTTPS origin. This override takes precedence over the Render address.
+The page builds subscription URLs from the address you opened in your browser. For example, opening `https://vlrggics.rispeng.com` displays and copies feeds on that domain. Configure a custom domain in Render without setting an additional application environment variable.
 
 No API key is required for the configured public API. If you use an authenticated API, set the optional `VLR_API_KEY` environment variable in Render. The client sends it as a bearer token. `VLR_API_BASE_URL` can override the configured API address.
 

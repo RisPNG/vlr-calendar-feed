@@ -1,8 +1,7 @@
 {
   "site": {
     "title": "VLR Calendar Feeds",
-    "description": "Public Valorant match calendars generated from VLR.gg.",
-    "base_url": ""
+    "description": "Public Valorant match calendars generated from VLR.gg."
   },
   "settings": {
     "api_base_url": "https://vlrggapi.rispeng.com",

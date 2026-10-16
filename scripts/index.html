@@ -44,9 +44,11 @@
     <footer>Schedules refresh automatically. Subscription apps refresh on their own schedule.</footer>
   </main>
   <script>
-    for (const button of document.querySelectorAll('button[data-url]')) {
+    for (const button of document.querySelectorAll('button[data-feed]')) {
+      const url = new URL(button.dataset.feed, window.location.href).href;
+      button.closest('.card').querySelector('code').textContent = url;
       button.addEventListener('click', async () => {
-        await navigator.clipboard.writeText(button.dataset.url);
+        await navigator.clipboard.writeText(url);
         button.textContent = 'Copied';
         setTimeout(() => button.textContent = 'Copy subscription URL', 1500);
       });

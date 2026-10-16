@@ -168,7 +168,6 @@ def workspace(tmp_path):
         "site": {
             "title": "VLR Calendar Feeds",
             "description": "Test feeds",
-            "base_url": "",
         },
         "settings": {
             "api_base_url": "https://api.example.test",
