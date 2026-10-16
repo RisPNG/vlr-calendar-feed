@@ -2,8 +2,6 @@
 
 Generate public `.ics` feeds from VLR.gg and publish them with GitHub Pages.
 
-Very wonky video tutorial: https://f005.backblazeb2.com/file/RisPNG/vlr-calendar-feed-tut.mp4
-
 The repo supports these calendar source types:
 
 - `team` - a team's upcoming, live, and optionally completed matches.
