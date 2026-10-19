@@ -589,6 +589,59 @@ def build_ical_calendar(
     return calendar.to_ical()
 
 
+def render_index(manifest: list[dict[str, Any]], site: dict[str, Any]) -> str:
+    calendar_template = Template(
+        (ROOT_DIR / "scripts" / "calendar.html").read_text(encoding="utf-8")
+    )
+    navigation, sections = [], []
+    for kind, label, section_id in (
+        ("global", "All matches", "all-matches"),
+        ("series", "Competitions", "competitions"),
+        ("event", "Events", "events"),
+        ("team", "Teams", "teams"),
+        ("player", "Players", "players"),
+    ):
+        feeds = [feed for feed in manifest if feed["type"] == kind]
+        if not feeds:
+            continue
+        navigation.append(
+            f'<a href="#{section_id}">{label} <span>{len(feeds)}</span></a>'
+        )
+        cards = [
+            calendar_template.substitute(
+                slug=html.escape(feed["slug"]),
+                name=html.escape(feed["name"]),
+                description=html.escape(feed["description"]),
+                file=html.escape(feed["file"]),
+                match_count=feed["match_count"],
+                match_label="match" if feed["match_count"] == 1 else "matches",
+            )
+            for feed in feeds
+        ]
+        sections.append(
+            f'<section class="calendar-group" id="{section_id}" aria-labelledby="{section_id}-title">'
+            f'<header class="group-heading"><h2 id="{section_id}-title">{label}</h2><span>{len(feeds)}</span></header>'
+            + "\n".join(cards)
+            + "</section>"
+        )
+    template = Template(
+        (ROOT_DIR / "scripts" / "index.html").read_text(encoding="utf-8")
+    )
+    return template.substitute(
+        title=html.escape(site.get("title", "VLR Calendar Feeds")),
+        description=html.escape(
+            site.get(
+                "description", "Public Valorant match calendars generated from VLR.gg."
+            )
+        ),
+        navigation="\n".join(navigation),
+        sections="\n".join(sections)
+        or '<p class="empty-state">No calendars are enabled.</p>',
+        feed_count=len(manifest),
+        calendar_label="calendar" if len(manifest) == 1 else "calendars",
+    )
+
+
 def build(
     config_path: Path = CONFIG_PATH,
     output_dir: Path = PUBLIC_DIR,
@@ -737,24 +790,9 @@ def build(
         )
         print(f"Built {filename}: {len(matches)} matches", flush=True)
     state["feeds"] = {source.slug: versions[source.slug] for source in sources}
-    site = config.get("site", {})
-    cards = []
-    for feed in manifest:
-        cards.append(
-            f'<article class="card"><h2>{html.escape(feed["name"])}</h2><p>{html.escape(feed["description"])}</p><p><strong>{feed["match_count"]}</strong> events generated.</p><div class="actions"><a href="{feed["file"]}">Download ICS</a><button data-feed="{feed["file"]}">Copy subscription URL</button></div><code>{feed["file"]}</code></article>'
-        )
-    template = Template(
-        (ROOT_DIR / "scripts" / "index.html").read_text(encoding="utf-8")
-    )
-    files["index.html"] = template.substitute(
-        title=html.escape(site.get("title", "VLR Calendar Feeds")),
-        description=html.escape(
-            site.get(
-                "description", "Public Valorant match calendars generated from VLR.gg."
-            )
-        ),
-        cards="\n".join(cards),
-    ).encode("utf-8")
+    files["index.html"] = render_index(manifest, config.get("site", {})).encode("utf-8")
+    for asset in ("style.css", "enhance.js"):
+        files[asset] = (ROOT_DIR / "scripts" / asset).read_bytes()
     files["feeds.json"] = (json.dumps(manifest, indent=2) + "\n").encode("utf-8")
     previous_files = (
         {path.name for path in previous_dir.iterdir() if path.is_file()}

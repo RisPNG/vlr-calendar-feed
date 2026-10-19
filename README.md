@@ -5,7 +5,7 @@ Follow Valorant teams, players, and competitions in your calendar app. Match sch
 ## Subscribe
 
 1. Open the calendar website and choose a calendar.
-2. Click **Copy subscription URL**.
+2. Click **Copy link** next to its subscription address.
 3. In Google Calendar, select **Other calendars → + → From URL**, paste the link, and add the calendar. Other calendar apps usually have a similar subscription option.
 
 A subscription URL looks like this:
