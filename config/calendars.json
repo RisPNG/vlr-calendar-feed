@@ -42,22 +42,6 @@
       "enabled": true
     },
     {
-      "slug": "vct-2026",
-      "name": "Valorant Champions Tour 2026",
-      "description": "All VCT 2026 matches from VLR.gg.",
-      "type": "series",
-      "series_id": 86,
-      "enabled": true
-    },
-    {
-      "slug": "game-changers-2026",
-      "name": "Valorant Game Changers 2026",
-      "description": "All Game Changers 2026 matches from VLR.gg.",
-      "type": "series",
-      "series_id": 87,
-      "enabled": true
-    },
-    {
       "slug": "paper-rex",
       "name": "Paper Rex VLR Matches",
       "description": "All Paper Rex Valorant matches from VLR.gg.",

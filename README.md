@@ -62,7 +62,7 @@ Open [localhost:8000](http://127.0.0.1:8000/) and allow a few minutes for the fi
 Google Calendar may continue showing a cached subscription after the site updates. To create a new subscription URL, add a query parameter:
 
 ```text
-https://calendar.example.com/vct-2026.ics?v=2
+https://calendar.example.com/paper-rex.ics?v=2
 ```
 
 This creates a different subscription URL. It does not control Google's refresh schedule.
