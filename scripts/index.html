@@ -1,58 +1,63 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="$description">
   <title>$title</title>
-  <style>
-    :root {
-      color-scheme: dark;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --background: #101114;
-      --foreground: #f5f5f5;
-      --muted: #c7c7c7;
-      --surface: #181a20;
-      --border: #2c2e36;
-      --shadow: rgba(0, 0, 0, .22);
-      --card-text: #d0d0d0;
-      --accent: #77dd77;
-      --accent-text: #051405;
-      --code-text: #b7ffb7;
-      --code-background: #0b0c0f;
-      --footer: #9c9c9c;
-    }
-    body { margin: 0; min-height: 100vh; background: var(--background); color: var(--foreground); }
-    main { width: min(920px, calc(100% - 32px)); margin: 0 auto; padding: 64px 0; }
-    h1 { font-size: clamp(2rem, 5vw, 4rem); line-height: 1; margin: 0 0 16px; }
-    .lede { color: var(--muted); font-size: 1.1rem; margin-bottom: 32px; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
-    .card { border: 1px solid var(--border); background: var(--surface); border-radius: 20px; padding: 20px; box-shadow: 0 20px 60px var(--shadow); }
-    .card h2 { margin: 0 0 8px; }
-    .card p { color: var(--card-text); }
-    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
-    a, button { border: 0; border-radius: 999px; background: var(--accent); color: var(--accent-text); padding: 10px 14px; font-weight: 700; text-decoration: none; cursor: pointer; }
-    button { font: inherit; }
-    code { display: block; overflow-x: auto; color: var(--code-text); background: var(--code-background); border-radius: 12px; padding: 10px; }
-    footer { margin-top: 32px; color: var(--footer); font-size: .9rem; }
-  </style>
+  <link rel="stylesheet" href="style.css">
+  <script src="enhance.js" defer></script>
 </head>
 <body>
-  <main>
-    <h1>$title</h1>
-    <p class="lede">$description</p>
-    <section class="grid">$cards</section>
-    <footer>Schedules refresh automatically. Subscription apps refresh on their own schedule.</footer>
+  <a class="skip-link" href="#main">Skip to calendars</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="wordmark" href="./" aria-label="$title home"><strong>VLR</strong><span>calendar feeds</span></a>
+      <nav aria-label="Primary">
+        <a href="#calendars">Calendars</a>
+        <a href="#subscribe">How to subscribe</a>
+        <a href="https://www.vlr.gg/">VLR.gg <span aria-hidden="true">&nearr;</span></a>
+      </nav>
+    </div>
+  </header>
+  <main id="main" tabindex="-1">
+    <header class="page-heading">
+      <p class="eyebrow">Valorant match subscriptions</p>
+      <h1>$title</h1>
+      <p>$description</p>
+    </header>
+    <div class="page-layout">
+      <aside class="browse" aria-labelledby="browse-title">
+        <h2 class="section-label" id="browse-title">Browse calendars</h2>
+        <nav class="category-nav" aria-label="Calendar categories">$navigation</nav>
+        <p class="sidebar-note">Follow a competition, team, or player. Each link is a separate calendar subscription.</p>
+        <a class="source-link" href="https://www.vlr.gg/matches">Match schedules on VLR.gg</a>
+      </aside>
+      <div class="calendar-list" id="calendars">
+        <div class="list-heading"><h2 class="section-label">Choose your calendars</h2><span>$feed_count $calendar_label</span></div>
+        $sections
+      </div>
+      <aside class="subscription-guide" id="subscribe" aria-labelledby="subscribe-title">
+        <h2 class="section-label" id="subscribe-title">How to subscribe</h2>
+        <section class="guide-panel" aria-labelledby="add-title">
+          <h3 id="add-title">Subscribe by URL</h3>
+          <ol>
+            <li>Choose a calendar and copy its subscription link.</li>
+            <li>In your calendar app, find the option to add a calendar by URL.</li>
+            <li>Paste the link and subscribe.</li>
+          </ol>
+          <p class="guide-note">In Google Calendar, use <strong>Other calendars &gt; + &gt; From URL</strong>.</p>
+        </section>
+        <h2 class="section-label">Schedule updates</h2>
+        <section class="guide-panel" aria-label="About calendar updates">
+          <p>Subscriptions receive schedule changes and results. Your calendar app decides when to check for updates.</p>
+          <p class="guide-note">Downloading an ICS file gives you a one-time import. Subscribe by URL to receive later changes.</p>
+        </section>
+      </aside>
+    </div>
+    <p id="copy-status" class="sr-only" role="status" aria-live="polite"></p>
+    <noscript><p class="browser-note">To subscribe without JavaScript, copy the link address of a calendar's Download ICS link and paste it into your calendar app.</p></noscript>
+    <footer class="site-footer"><p>Match data from <a href="https://www.vlr.gg/">VLR.gg</a>. An independent calendar project.</p><a href="#main">Back to top</a></footer>
   </main>
-  <script>
-    for (const button of document.querySelectorAll('button[data-feed]')) {
-      const url = new URL(button.dataset.feed, window.location.href).href;
-      button.closest('.card').querySelector('code').textContent = url;
-      button.addEventListener('click', async () => {
-        await navigator.clipboard.writeText(url);
-        button.textContent = 'Copied';
-        setTimeout(() => button.textContent = 'Copy subscription URL', 1500);
-      });
-    }
-  </script>
 </body>
 </html>

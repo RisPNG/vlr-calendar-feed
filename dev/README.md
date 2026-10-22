@@ -134,6 +134,14 @@ For a single [VCT 2026 Pacific Stage 1 event](https://www.vlr.gg/event/2775/vct-
 
 Durations are estimates because scheduled match listings do not provide an end time.
 
+## Website design
+
+The subscription page follows VLR.gg's compact navigation, grouped lists, charcoal header, grey panels, and red accents. It uses ordinary HTML links, local CSS, and system fonts, with light and dark palettes in `scripts/style.css`. Narrow screens keep every category and subscription reachable. Keyboard focus, skip navigation, and print styles are included.
+
+`scripts/index.html` contains the page layout, and `scripts/calendar.html` contains each calendar entry. `render_index` in `scripts/build_calendar.py` groups the enabled feeds and escapes configured text. The generator publishes `style.css` and `enhance.js` in the same atomic snapshot as the index and calendar files, so assets always match their page.
+
+The small optional script expands visible filenames to addresses on the opened domain and enables one-click copying when the Clipboard API is available. A refused clipboard write selects the address and announces how to copy it manually. Without JavaScript, use the Download ICS link or copy its link address to subscribe. No frontend dependencies or third-party assets are required.
+
 ## Development
 
 Install the development dependencies and run the tests:

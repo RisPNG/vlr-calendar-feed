@@ -197,6 +197,14 @@ def test_initial_background_build_keeps_health_responsive_and_serves_real_feeds(
         assert 'data-feed="all.ics"' in client.get("/").text
         assert "<code>all.ics</code>" in client.get("/").text
         assert "data-url=" not in client.get("/").text
+        for asset, content_type in (
+            ("style.css", "text/css"),
+            ("enhance.js", "javascript"),
+        ):
+            published_asset = client.get(f"/{asset}")
+            assert published_asset.status_code == 200
+            assert content_type in published_asset.headers["content-type"]
+            assert published_asset.content
         assert client.get("/state.json").status_code == 404
         manifest = client.get("/feeds.json")
         assert manifest.status_code == 200
